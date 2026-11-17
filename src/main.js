@@ -8,6 +8,9 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality } from 'mediabunny';
+import { Capacitor, registerPlugin } from '@capacitor/core';
+const NativeRenderExport = registerPlugin('RenderExport');
 import '../style.css';
 
 const $ = (selector) => document.querySelector(selector);
@@ -27,6 +30,13 @@ let currentFrame = 0;
 let isPlaying = false;
 let playTimer = null;
 let currentModel = null;
+let importedMixer = null;
+let importedClips = [];
+let importedAnimationAction = null;
+let activeCamera = camera;
+let viewCameraObject = null;
+let cameraMode = false;
+let currentProjectId = null;
 let boneTarget = null;
 let activeAnimationTarget = null;
 let assetCount = 0;
@@ -62,7 +72,7 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 try {
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.6));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -79,7 +89,7 @@ try {
   orbit.maxDistance = 40;
   const gizmo = new TransformControls(camera, renderer.domElement);
   scene.add(gizmo.getHelper());
-  gizmo.setSize(0.48);
+  gizmo.setSize(1.18);
   gizmo.addEventListener('dragging-changed', (event) => { orbit.enabled = !event.value; });
   gizmo.addEventListener('change', () => updateBoneMarkers());
   // Keep Three.js axis handles functional, with distinct high-visibility neon RGB colors.
@@ -93,7 +103,7 @@ try {
     }
     node.renderOrder = 999;
   });
-  gizmo.addEventListener('objectChange', () => { renderProperties(); });
+  gizmo.addEventListener('objectChange', () => { renderProperties(); updateBoneMarkers(); if (gizmo.object?.userData.helper) gizmo.object.userData.helper.update(); scheduleProjectSave(); });
   window.editorGizmo = gizmo;
 } catch (error) {
   console.error('Editor 3D startup error:', error);
@@ -117,7 +127,8 @@ scene.add(ground);
 
 const composer = new EffectComposer(renderer);
 composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 0.9)); // Lower-resolution post FX for mobile GPUs.
-composer.addPass(new RenderPass(scene, camera));
+const sceneRenderPass = new RenderPass(scene, camera);
+composer.addPass(sceneRenderPass);
 const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.24, 0.35, 0.88);
 composer.addPass(bloomPass);
 const lightPostPass = new ShaderPass({
@@ -137,7 +148,7 @@ function toast(message) {
   toast.timer = setTimeout(() => element.classList.remove('show'), 2200);
 }
 function updateStatus() {
-  $('#status').textContent = `${objects.length} objeto${objects.length === 1 ? '' : 's'}`;
+  $('#status').textContent = `${currentProjectId ? (projectList().find((p) => p.id === currentProjectId)?.name || 'Proyecto') + ' · ' : ''}${objects.length} objeto${objects.length === 1 ? '' : 's'}`;
 }
 function addAsset(kind) {
   if (kind === 'point' || kind === 'directional') {
@@ -153,18 +164,20 @@ function addAsset(kind) {
     mesh.position.set(0, kind === 'plane' ? 0.2 : 0.65, 0);
     mesh.userData.kind = name;
     mesh.castShadow = true; mesh.receiveShadow = true;
-    scene.add(mesh); objects.push(mesh); select(mesh); rebuildTimeline(); updateStatus();
+    scene.add(mesh); objects.push(mesh); select(mesh); rebuildTimeline(); updateStatus(); saveCurrentProject();
     return;
   }
   let object;
   if (kind === 'camera') {
     object = new THREE.PerspectiveCamera(50, camera.aspect, 0.1, 100);
     object.position.set(3, 2.5, 4);
+    object.lookAt(0, 0.6, 0);
     object.name = `Cámara ${suffix}`;
     object.userData.kind = 'Cámara';
-    const helper = new THREE.CameraHelper(object);
-    object.userData.helper = helper;
-    scene.add(helper);
+    object.userData.helper = new THREE.CameraHelper(object);
+    scene.add(object.userData.helper);
+    viewCameraObject = object;
+    $('#enterCamera').hidden = false;
   } else if (kind === 'point') {
     object = new THREE.PointLight(0xffffff, 2.2, 10, 2);
     object.position.set(1.5, 2.2, 1.5);
@@ -196,8 +209,10 @@ function addAsset(kind) {
   assetObjects.push(object);
   objects.push(object);
   select(object);
+  if (object.isCamera) { viewCameraObject = object; $('#enterCamera').hidden = false; }
   rebuildTimeline();
   updateStatus();
+  saveCurrentProject();
   toast(`${object.userData.kind} agregada`);
 }
 function refreshList() {
@@ -253,6 +268,7 @@ function addObject(kind = 'Cubo', position = [0, 0.65, 0], color = null) {
   objects.push(mesh);
   select(mesh);
   updateStatus();
+  saveCurrentProject();
   return mesh;
 }
 function field(label, axis, value, kind) {
@@ -266,23 +282,35 @@ function renderProperties() {
   const p = selected.position;
   const r = selected.rotation;
   const s = selected.scale;
-  props.innerHTML = `<label class="prop-label">Nombre<input id="objectName" type="text" maxlength="50"></label>
+  const cameraAction = selected.isCamera ? `<button id="selectedCameraView">Mirar por esta cámara</button>` : '';
+  const renderMaterial = selected.material;
+  const emission = renderMaterial?.emissive ? `<div class="section-label">EMISIÓN</div><label class="prop-label">Color emisión<input id="emissionColor" type="color"></label><label class="prop-label">Intensidad<input id="emissionIntensity" type="number" min="0" max="10" step="0.1" value="${renderMaterial.emissiveIntensity || 0}"></label>` : '';
+  props.innerHTML = `${cameraAction}<label class="prop-label">Nombre<input id="objectName" type="text" maxlength="50"></label>
     <label class="prop-label">Color<input id="objectColor" type="color"></label>
-    <div class="section-label">POSICIÓN</div>${field('X', 0, p.x, 'position')}${field('Y', 1, p.y, 'position')}${field('Z', 2, p.z, 'position')}
+    ${emission}<div class="section-label">POSICIÓN</div>${field('X', 0, p.x, 'position')}${field('Y', 1, p.y, 'position')}${field('Z', 2, p.z, 'position')}
     <div class="section-label">ROTACIÓN</div>${field('X', 0, THREE.MathUtils.radToDeg(r.x), 'rotation')}${field('Y', 1, THREE.MathUtils.radToDeg(r.y), 'rotation')}${field('Z', 2, THREE.MathUtils.radToDeg(r.z), 'rotation')}
     <div class="section-label">ESCALA</div>${field('X', 0, s.x, 'scale')}${field('Y', 1, s.y, 'scale')}${field('Z', 2, s.z, 'scale')}`;
   const nameInput = $('#objectName');
   nameInput.value = selected.name;
-  nameInput.addEventListener('change', () => { selected.name = safeName(nameInput.value); refreshList(); });
+  nameInput.addEventListener('change', () => { selected.name = safeName(nameInput.value); refreshList(); saveCurrentProject(); });
   const colorInput = $('#objectColor');
   colorInput.value = `#${selected.material?.color?.getHexString?.() || 'ffffff'}`;
-  colorInput.addEventListener('input', () => selected.material?.color?.set(colorInput.value));
+  colorInput.addEventListener('input', () => { selected.material?.color?.set(colorInput.value); scheduleProjectSave(); });
+  if (selected.material?.emissive) {
+    $('#emissionColor').value = `#${selected.material.emissive.getHexString()}`;
+    $('#emissionColor').addEventListener('input', (event) => selected.material?.emissive?.set(event.target.value));
+    $('#emissionIntensity').addEventListener('input', (event) => { if (selected.material) selected.material.emissiveIntensity = Math.max(0, Number(event.target.value) || 0); });
+  }
+  $('#selectedCameraView')?.addEventListener('click', () => enterCameraView(selected));
   props.querySelectorAll('[data-axis]').forEach((input) => input.addEventListener('change', () => {
     const axis = Number(input.dataset.axis);
     const value = Number(input.value) || 0;
     if (input.dataset.kind === 'position') selected.position.setComponent(axis, value);
     if (input.dataset.kind === 'rotation') selected.rotation.setComponent(axis, THREE.MathUtils.degToRad(value));
     if (input.dataset.kind === 'scale') selected.scale.setComponent(axis, Math.max(0.01, value));
+    if (selected.isCamera && selected.userData.helper) selected.userData.helper.update();
+    if (selected.userData.helper?.update) selected.userData.helper.update();
+    saveCurrentProject();
   }));
 }
 function setTool(tool) {
@@ -294,24 +322,200 @@ function setTool(tool) {
 function removeSelected() {
   if (!selected) return;
   scene.remove(selected);
+  if (selected.userData.helper) scene.remove(selected.userData.helper);
   objects.splice(objects.indexOf(selected), 1);
+  if (selected === viewCameraObject) viewCameraObject = objects.find((item) => item.isCamera) || null;
   selected = null;
+  $('#enterCamera').hidden = !viewCameraObject;
   refreshList();
   renderProperties();
   updateStatus();
+  saveCurrentProject();
 }
 function snapshot() {
-  return { format: 'editor-3d-scene', version: 1, objects: objects.map((object) => ({
+  return { format: 'editor-3d-scene', version: 3, objects: objects.filter((object) => object.userData.kind !== 'Modelo').map((object) => ({
     name: object.name, kind: object.userData.kind || 'Cubo', position: object.position.toArray(),
     rotation: object.rotation.toArray(), scale: object.scale.toArray(),
-    color: `#${object.material?.color?.getHexString?.() || 'ffffff'}`
+    color: `#${object.material?.color?.getHexString?.() || object.color?.getHexString?.() || 'ffffff'}`,
+    intensity: object.intensity, distance: object.distance, angle: object.angle, penumbra: object.penumbra,
+    fov: object.fov, near: object.near, far: object.far
   })) };
 }
+function projectList() { try { return JSON.parse(localStorage.getItem('editor3d:projects') || '[]'); } catch { return []; } }
+function writeProjectList(items) { localStorage.setItem('editor3d:projects', JSON.stringify(items)); }
+let projectSaveTimer = null;
+function scheduleProjectSave() { clearTimeout(projectSaveTimer); projectSaveTimer = setTimeout(saveCurrentProject, 350); }
+function saveCurrentProject() {
+  if (!currentProjectId) return;
+  const projects = projectList();
+  const project = projects.find((item) => item.id === currentProjectId);
+  if (!project) return;
+  project.scene = snapshot(); project.updatedAt = Date.now();
+  writeProjectList(projects); renderProjectCards();
+}
+function renderProjectCards() {
+  const grid = $('#projectGrid'), empty = $('#emptyProjects');
+  if (!grid) return;
+  grid.replaceChildren();
+  const projects = projectList();
+  empty.hidden = projects.length > 0;
+  for (const project of projects) {
+    const card = document.createElement('button'); card.className = 'project-card';
+    const preview = document.createElement('span'); preview.className = 'project-preview'; preview.textContent = '⬡';
+    const title = document.createElement('b'); title.textContent = project.name;
+    const date = document.createElement('small'); date.textContent = `Editado ${new Date(project.updatedAt || project.createdAt).toLocaleDateString()}`;
+    card.append(preview, title, date); card.addEventListener('click', () => openProject(project.id)); grid.append(card);
+  }
+}
+function openProject(id) {
+  const project = projectList().find((item) => item.id === id);
+  if (!project) return;
+  currentProjectId = id;
+  localStorage.setItem('editor3d:last-project', id);
+  $('#projectHome').hidden = true; $('#app').hidden = false;
+  if (project.scene) loadScene(project.scene);
+  else addObject('Cubo');
+  if (!objects.length) addObject('Cubo');
+  $('#home').title = project.name; updateStatus();
+}
+function createProject() {
+  const dialog = $('#projectDialog'); dialog.hidden = false;
+  const input = $('#projectNameInput'); input.value = ''; input.focus();
+}
+function confirmCreateProject() {
+  const name = ($('#projectNameInput').value || '').trim();
+  if (!name) { $('#projectNameInput').focus(); return; }
+  const item = { id: `p-${Date.now()}`, name: safeName(name), createdAt: Date.now(), updatedAt: Date.now(), scene: { format: 'editor-3d-scene', version: 2, objects: [] } };
+  const projects = projectList(); projects.unshift(item); writeProjectList(projects); $('#projectDialog').hidden = true; renderProjectCards(); openProject(item.id);
+}
+function returnToProjects() { saveCurrentProject(); $('#app').hidden = true; $('#projectHome').hidden = false; renderProjectCards(); }
 function download(name, data, type) {
   const url = URL.createObjectURL(new Blob([data], { type }));
   const anchor = document.createElement('a');
-  anchor.href = url; anchor.download = name; anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  anchor.href = url; anchor.download = name; document.body.append(anchor); anchor.click(); anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+function openRenderDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('editor3d-storage', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('handles');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+async function storeRenderFolder(handle) {
+  try { const db = await openRenderDb(); await new Promise((resolve, reject) => { const tx = db.transaction('handles', 'readwrite'); tx.objectStore('handles').put(handle, 'render-folder'); tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); }); } catch {}
+}
+async function restoreRenderFolder() {
+  try { const db = await openRenderDb(); return await new Promise((resolve, reject) => { const req = db.transaction('handles').objectStore('handles').get('render-folder'); req.onsuccess = () => resolve(req.result || null); req.onerror = () => reject(req.error); }); } catch { return null; }
+}
+async function blobToBase64(blob) {
+  return await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = () => reject(reader.error); reader.readAsDataURL(blob); });
+}
+async function saveBlobToChosenFolder(name, blob) {
+  if (Capacitor.isNativePlatform()) {
+    const data = await blobToBase64(blob);
+    await NativeRenderExport.saveFile({ name, mimeType: blob.type || 'application/octet-stream', data });
+    toast(`Guardado en carpeta elegida: ${name}`); return;
+  }
+  if (!renderFolderHandle) throw new Error('Elige una carpeta de exportación primero');
+  let permission = await renderFolderHandle.queryPermission({ mode: 'readwrite' });
+  if (permission !== 'granted') permission = await renderFolderHandle.requestPermission({ mode: 'readwrite' });
+  if (permission !== 'granted') throw new Error('El navegador no concedió permiso de escritura');
+  const handle = await renderFolderHandle.getFileHandle(name, { create: true });
+  const writable = await handle.createWritable(); await writable.write(blob); await writable.close();
+  localStorage.setItem('editor3d:render-folder-name', renderFolderHandle.name || 'Carpeta elegida');
+  $('#renderPath').value = renderFolderHandle.name || 'Carpeta elegida'; toast(`Guardado: ${name}`);
+}
+function readRenderFolderName() { return localStorage.getItem('editor3d:render-folder-name') || ''; }
+async function loadNativeRenderFolder() {
+  if (!Capacitor.isNativePlatform()) return;
+  try { const result = await NativeRenderExport.getFolder(); if (result.displayName) { localStorage.setItem('editor3d:render-folder-name', result.displayName); $('#renderPath').value = result.displayName; } } catch {}
+}
+function renderSize() {
+  const mode = $('#renderResolution').value;
+  if (mode === '1080') return [1920, 1080];
+  if (mode === '720') return [1280, 720];
+  return [Math.max(2, container.clientWidth & ~1), Math.max(2, container.clientHeight & ~1)];
+}
+function captureRenderFrame(width, height) {
+  const oldSize = new THREE.Vector2(); renderer.getSize(oldSize);
+  const oldRatio = renderer.getPixelRatio();
+  const renderCamera = cameraMode ? activeCamera : camera;
+  const oldAspect = renderCamera.aspect;
+  renderer.setPixelRatio(1); renderer.setSize(width, height, false);
+  composer.setPixelRatio(1); composer.setSize(width, height);
+  renderCamera.aspect = width / height; renderCamera.updateProjectionMatrix();
+  sceneRenderPass.camera = renderCamera;
+  if (postEnabled) composer.render(); else renderer.render(scene, renderCamera);
+  const canvas = renderer.domElement;
+  const blobUrl = canvas.toDataURL('image/png');
+  renderer.setPixelRatio(oldRatio); renderer.setSize(oldSize.x, oldSize.y, false);
+  composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 0.9)); composer.setSize(oldSize.x, oldSize.y);
+  renderCamera.aspect = oldAspect; renderCamera.updateProjectionMatrix();
+  sceneRenderPass.camera = cameraMode ? activeCamera : camera;
+  return blobUrl;
+}
+async function exportPng() {
+  const [width, height] = renderSize();
+  try {
+    const dataUrl = captureRenderFrame(width, height);
+    const blob = await (await fetch(dataUrl)).blob();
+    if (Capacitor.isNativePlatform() || renderFolderHandle) {
+      try { await saveBlobToChosenFolder(`render-${Date.now()}.png`, blob); $('#renderStatus').textContent = 'PNG guardado en la carpeta elegida.'; return; } catch (error) { $('#renderStatus').textContent = error.message || 'No se pudo usar la carpeta elegida.'; }
+    }
+    download(`render-${Date.now()}.png`, blob, 'image/png');
+    $('#renderStatus').textContent = 'PNG exportado a Descargas. Si tu Android no permite elegir carpeta en esta WebView, usa el selector de archivos del sistema.';
+  } catch (error) { toast(`No se pudo exportar PNG: ${error.message || error}`); }
+}
+async function exportMp4() {
+  const duration = Math.max(1, Math.min(30, Number($('#renderDuration').value) || 5));
+  if (!('VideoEncoder' in window) || !('VideoFrame' in window)) {
+    toast('Este WebView no ofrece codificación H.264 MP4.');
+    $('#renderStatus').textContent = 'No se generó MP4: este WebView no incluye WebCodecs H.264. PNG funciona; MP4 requiere un Android/WebView compatible.';
+    return;
+  }
+  const [width, height] = renderSize();
+  const config = { codec: 'avc1.42001f', width, height, bitrate: 6000000, framerate: 24 };
+  const support = await VideoEncoder.isConfigSupported(config).catch(() => null);
+  if (!support?.supported) { $('#renderStatus').textContent = 'El dispositivo no ofrece H.264 para MP4 en este WebView; no se guardó un video con extensión incorrecta.'; toast('Codificador MP4 no disponible'); return; }
+  const target = new BufferTarget();
+  const output = new Output({ format: new Mp4OutputFormat(), target });
+  const videoSource = new CanvasSource(renderer.domElement, { codec: 'avc', quality: new Quality({ bitrate: 6000000 }) });
+  output.addVideoTrack(videoSource, { frameRate: 24 });
+  const oldSize = new THREE.Vector2(); renderer.getSize(oldSize); const oldRatio = renderer.getPixelRatio(); const renderCamera = cameraMode ? activeCamera : camera; const oldAspect = renderCamera.aspect;
+  renderer.setPixelRatio(1); renderer.setSize(width, height, false); composer.setPixelRatio(1); composer.setSize(width, height); renderCamera.aspect = width / height; renderCamera.updateProjectionMatrix();
+  sceneRenderPass.camera = renderCamera;
+  $('#renderStatus').textContent = `Renderizando MP4 · ${duration} s…`;
+  try {
+    await output.start();
+    const total = duration * 24;
+    for (let index = 0; index < total; index++) {
+      if (keyframes.size) interpolatePose(Math.round(index / Math.max(1, total - 1) * 120));
+      else if (importedMixer && importedAnimationAction) importedMixer.setTime(index / 24);
+      if (postEnabled) composer.render(); else renderer.render(scene, renderCamera);
+      await videoSource.add(index / 24, 1 / 24);
+      if (index % 6 === 0) { $('#renderStatus').textContent = `Renderizando MP4 · ${Math.floor(index / total * 100)}%`; await new Promise((resolve) => requestAnimationFrame(resolve)); }
+    }
+    await output.finalize();
+    const blob = new Blob([target.buffer], { type: 'video/mp4' }); const name = `render-${Date.now()}.mp4`;
+    if (renderFolderHandle) { try { await saveBlobToChosenFolder(name, blob); } catch (error) { download(name, blob, 'video/mp4'); $('#renderStatus').textContent = `${error.message || 'Carpeta inaccesible'} · MP4 descargado a Descargas.`; } }
+    else download(name, blob, 'video/mp4');
+    $('#renderStatus').textContent = 'MP4 H.264 exportado.'; toast('Render MP4 listo');
+  } catch (error) { console.error(error); toast(`No se pudo renderizar MP4: ${error.message || error}`); $('#renderStatus').textContent = `Falló la exportación MP4: ${error.message || error}`; }
+  finally { renderer.setPixelRatio(oldRatio); renderer.setSize(oldSize.x, oldSize.y, false); composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 0.9)); composer.setSize(oldSize.x, oldSize.y); renderCamera.aspect = oldAspect; renderCamera.updateProjectionMatrix(); sceneRenderPass.camera = cameraMode ? activeCamera : camera; if (keyframes.size) interpolatePose(currentFrame); }
+}
+let renderFolderHandle = null;
+async function chooseRenderFolder() {
+  if (Capacitor.isNativePlatform()) {
+    try { const result = await NativeRenderExport.chooseFolder(); const name = result.displayName || 'Carpeta elegida'; localStorage.setItem('editor3d:render-folder-name', name); $('#renderPath').value = name; $('#renderStatus').textContent = 'La app tiene permiso persistente para exportar PNG y MP4 en esta carpeta.'; return; }
+    catch (error) { if (!String(error?.message || error).includes('canceled')) { $('#renderStatus').textContent = `No se pudo elegir carpeta: ${error.message || error}`; toast('Falló el selector de carpeta'); } return; }
+  }
+  if (window.showDirectoryPicker) {
+    try { renderFolderHandle = await window.showDirectoryPicker({ mode: 'readwrite' }); await storeRenderFolder(renderFolderHandle); const name = renderFolderHandle.name || 'Carpeta elegida'; localStorage.setItem('editor3d:render-folder-name', name); $('#renderPath').value = name; $('#renderStatus').textContent = 'Carpeta recordada; Android puede volver a pedir permiso al exportar.'; return; } catch (error) { if (error.name === 'AbortError') return; }
+  }
+  $('#renderStatus').textContent = 'Este navegador no admite elegir una carpeta; el archivo exportado se descargará a Descargas.';
+  toast('Elige carpeta no está disponible en este navegador');
 }
 function saveScene() {
   download('mi-escena-3d.json', JSON.stringify(snapshot(), null, 2), 'application/json');
@@ -319,15 +523,26 @@ function saveScene() {
 }
 function loadScene(data) {
   if (data?.format !== 'editor-3d-scene' || !Array.isArray(data.objects)) throw new Error('Archivo de escena no válido');
-  for (const object of [...objects]) scene.remove(object);
-  objects.length = 0; selected = null;
+  for (const object of [...objects]) { scene.remove(object); if (object.userData.helper) scene.remove(object.userData.helper); }
+  for (const marker of boneDots.values()) scene.remove(marker);
+  boneDots.clear(); objects.length = 0; assetObjects.length = 0; selected = null; currentModel = null; boneTarget = null; importedMixer = null; importedClips = []; importedAnimationAction = null; viewCameraObject = null; $('#animationPanel').querySelector('.clip-box')?.remove();
+  $('#enterCamera').hidden = true; if (cameraMode) exitCameraView();
   for (const item of data.objects.slice(0, 300)) {
-    const object = addObject(item.kind === 'Esfera' ? 'Esfera' : 'Cubo', Array.isArray(item.position) ? item.position : [0, 0.65, 0], item.color);
+    let object;
+    if (item.kind === 'Cámara') { addAsset('camera'); object = objects.at(-1); }
+    else if (item.kind === 'Luz puntual') { addAsset('point'); object = objects.at(-1); }
+    else if (item.kind === 'Luz direccional') { addAsset('directional'); object = objects.at(-1); }
+    else if (item.kind === 'Luz ambiente') { addAsset('ambient'); object = objects.at(-1); }
+    else object = addObject(item.kind === 'Esfera' ? 'Esfera' : item.kind === 'Plano' ? 'Plano' : 'Cubo', Array.isArray(item.position) ? item.position : [0, 0.65, 0], item.color);
     object.name = safeName(item.name);
+    object.position.fromArray(Array.isArray(item.position) ? item.position : [0, 0.65, 0]);
     object.rotation.fromArray(Array.isArray(item.rotation) ? item.rotation : [0, 0, 0]);
     object.scale.fromArray(Array.isArray(item.scale) ? item.scale : [1, 1, 1]);
+    if (object.isLight) { object.intensity = item.intensity ?? object.intensity; if ('distance' in object) object.distance = item.distance ?? object.distance; if ('angle' in object) object.angle = item.angle ?? object.angle; if ('penumbra' in object) object.penumbra = item.penumbra ?? object.penumbra; }
+    if (object.isCamera) { object.fov = item.fov || object.fov; object.near = item.near || object.near; object.far = item.far || object.far; object.updateProjectionMatrix(); object.userData.helper?.update(); viewCameraObject = object; }
   }
-  refreshList(); renderProperties(); updateStatus(); toast('Escena importada');
+  if (viewCameraObject) $('#enterCamera').hidden = false;
+  refreshList(); renderProperties(); updateStatus(); saveCurrentProject(); toast('Escena importada');
 }
 function importFile(file) {
   if (!file) return;
@@ -341,7 +556,27 @@ function importFile(file) {
     model.name = safeName(file.name.replace(/\.(glb|gltf)$/i, ''));
     model.userData.kind = 'Modelo';
     model.traverse((child) => { if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; } });
-    scene.add(model); objects.push(model); currentModel = model; boneTarget = null; select(model); makeBoneMarkers(model); rebuildTimeline(); updateStatus(); toast(allBones().length ? `Modelo importado · ${allBones().length} huesos` : 'Modelo importado · sin armature'); URL.revokeObjectURL(url);
+    if (importedAnimationAction) { importedAnimationAction.stop(); importedAnimationAction = null; }
+    scene.add(model); objects.push(model); currentModel = model; boneTarget = null; select(model); makeBoneMarkers(model);
+    importedClips = gltf.animations || [];
+    importedMixer = importedClips.length ? new THREE.AnimationMixer(model) : null;
+    if (importedMixer) {
+      $('#animationPanel').querySelector('.clip-box')?.remove();
+      const clipBox = document.createElement('div'); clipBox.className = 'clip-box';
+      const clipTitle = document.createElement('span'); clipTitle.textContent = 'ANIMACIONES DEL MODELO'; clipBox.append(clipTitle);
+      importedClips.forEach((clip, index) => {
+        const play = document.createElement('button'); play.textContent = `▶ ${clip.name || `Clip ${index + 1}`}`;
+        play.addEventListener('click', () => {
+          importedMixer.stopAllAction();
+          importedAnimationAction = importedMixer.clipAction(clip); importedAnimationAction.reset().play();
+          $('#animMode').dataset.clip = 'playing'; toast(`Reproduciendo ${clip.name || `Clip ${index + 1}`}`);
+        }); clipBox.append(play);
+      });
+      const own = document.createElement('button'); own.textContent = '✎ Crear animación propia';
+      own.addEventListener('click', () => stopImportedClipPreservingPose()); clipBox.append(own);
+      $('#animationPanel').append(clipBox);
+    }
+    rebuildTimeline(); updateStatus(); toast(allBones().length ? `Modelo importado · ${allBones().length} huesos · ${importedClips.length} clips` : 'Modelo importado · sin armature'); URL.revokeObjectURL(url);
   }, undefined, () => { URL.revokeObjectURL(url); toast('No se pudo importar el modelo'); });
 }
 function exportGlb() {
@@ -352,6 +587,19 @@ function exportGlb() {
     else download('escena-3d.gltf', JSON.stringify(result), 'model/gltf+json');
     toast('Exportación lista');
   }, (error) => { console.error(error); toast('No se pudo exportar'); }, { binary: true });
+}
+function stopImportedClipPreservingPose() {
+  if (importedMixer) {
+    const bones = allBones();
+    const saved = new Map(bones.map((bone) => [bone.uuid, readTransform(bone)]));
+    importedMixer.stopAllAction(); importedAnimationAction = null; importedMixer.setTime(0);
+    for (const bone of bones) writeTransform(bone, saved.get(bone.uuid));
+    currentModel?.updateMatrixWorld(true); updateBoneMarkers();
+  }
+  if (currentModel) { animationMode = true; document.body.classList.add('animating'); $('#animationPanel').hidden = false; $('#animationTimeline').hidden = false; $('#animMode').innerHTML = 'Animation <span>⌄</span>'; }
+  activeAnimationTarget = boneTarget || allBones()[0] || selected;
+  if (activeAnimationTarget?.isBone) { boneTarget = activeAnimationTarget; window.editorGizmo?.attach(boneTarget); window.editorGizmo?.setMode('rotate'); }
+  rebuildTimeline(); toast('Clip detenido · edición manual');
 }
 function allBones() {
   const found = [];
@@ -413,6 +661,7 @@ function makeBoneMarkers(model) {
   updateBoneMarkers();
 }
 function selectBone(bone) {
+  if (importedAnimationAction) stopImportedClipPreservingPose();
   boneTarget = bone;
   activeAnimationTarget = bone;
   window.editorGizmo?.attach(bone);
@@ -509,6 +758,7 @@ function refreshBoneList() {
 }
 function toggleAnimationMode() {
   animationMode = !animationMode;
+  if (animationMode && importedAnimationAction) stopImportedClipPreservingPose();
   document.body.classList.toggle('animating', animationMode);
   $('#animationPanel').hidden = !animationMode;
   $('#animationTimeline').hidden = !animationMode;
@@ -552,7 +802,8 @@ function writeTransform(node, state) {
   node.scale.fromArray(safe.scale);
 }
 function captureKeyframe() {
-  const frame = Math.max(0, Math.min(120, Number($('#frameNumber').value) || currentFrame));
+  const inputFrame = Number($('#frameNumber').value);
+  const frame = Math.max(0, Math.min(120, Number.isFinite(inputFrame) ? inputFrame : currentFrame));
   currentFrame = frame;
   const target = activeAnimationTarget || boneTarget || selected;
   if (!target) { toast('Selecciona un objeto o hueso'); return; }
@@ -618,8 +869,31 @@ function resize() {
   if (!renderer || rect.width < 2 || rect.height < 2) return;
   renderer.setSize(rect.width, rect.height, false);
   composer.setSize(rect.width, rect.height);
-  camera.aspect = rect.width / rect.height;
+  const aspect = rect.width / rect.height;
+  camera.aspect = aspect;
   camera.updateProjectionMatrix();
+  for (const object of objects) if (object.isCamera) { object.aspect = aspect; object.updateProjectionMatrix(); object.userData.helper?.update(); }
+  if (cameraMode && activeCamera) { activeCamera.aspect = aspect; activeCamera.updateProjectionMatrix(); }
+}
+function enterCameraView(selectedCamera = viewCameraObject) {
+  if (!selectedCamera?.isCamera) { toast('Selecciona una cámara en la jerarquía'); return; }
+  activeCamera = selectedCamera;
+  cameraMode = true;
+  sceneRenderPass.camera = activeCamera;
+  $('#enterCamera').hidden = true;
+  $('#exitCamera').hidden = false;
+  orbit.enabled = false;
+  $('#hint').textContent = `Vista de ${selectedCamera.name} · Pulsa Salir para volver`;
+  toast(`Mirando por ${selectedCamera.name}`);
+}
+function exitCameraView() {
+  cameraMode = false;
+  activeCamera = camera;
+  sceneRenderPass.camera = camera;
+  $('#enterCamera').hidden = !viewCameraObject;
+  $('#exitCamera').hidden = true;
+  orbit.enabled = true;
+  $('#hint').textContent = 'Arrastra para orbitar · pellizca para acercar';
 }
 let resizeObserverFrame = 0;
 new ResizeObserver(() => {
@@ -661,11 +935,26 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   while (target && !objects.includes(target)) target = target.parent;
   select(target);
 });
+$('#createProject').addEventListener('click', createProject);
+$('#createProjectEmpty').addEventListener('click', createProject);
+$('#confirmProject').addEventListener('click', confirmCreateProject);
+$('#cancelProject').addEventListener('click', () => { $('#projectDialog').hidden = true; });
+$('#projectNameInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') confirmCreateProject(); if (event.key === 'Escape') $('#projectDialog').hidden = true; });
+$('#openProjects').addEventListener('click', returnToProjects);
+$('#home').addEventListener('click', returnToProjects);
+$('#enterCamera').addEventListener('click', () => enterCameraView(selected?.isCamera ? selected : viewCameraObject));
+$('#exitCamera').addEventListener('click', exitCameraView);
+$('#selectCameraView').addEventListener('click', () => { const cameras = objects.filter((item) => item.isCamera); if (!cameras.length) { toast('Añade una cámara desde Assets'); return; } const index = cameras.indexOf(viewCameraObject); viewCameraObject = cameras[(index + 1) % cameras.length]; toast(`Cámara activa: ${viewCameraObject.name}`); });
+$('#renderOpen').addEventListener('click', async () => { $('#renderPanel').hidden = !$('#renderPanel').hidden; $('#renderPath').value = readRenderFolderName(); if (Capacitor.isNativePlatform()) await loadNativeRenderFolder(); else if (!renderFolderHandle) renderFolderHandle = await restoreRenderFolder(); });
+$('#renderClose').addEventListener('click', () => { $('#renderPanel').hidden = true; });
+$('#chooseRenderPath').addEventListener('click', chooseRenderFolder);
+$('#renderFormat').addEventListener('change', (event) => { $('#startRender').textContent = event.target.value === 'png' ? 'Exportar PNG' : 'Exportar MP4'; $('#renderDuration').hidden = event.target.value !== 'mp4'; });
+$('#startRender').addEventListener('click', () => $('#renderFormat').value === 'png' ? exportPng() : exportMp4());
 $('#addCube').addEventListener('click', () => addObject('Cubo'));
 $('#addSphere').addEventListener('click', () => addObject('Esfera'));
 $('#delete').addEventListener('click', removeSelected);
 $('#addMenu')?.addEventListener('click', () => addObject('Cubo'));
-$('#save').addEventListener('click', saveScene);
+$('#save').addEventListener('click', () => { saveCurrentProject(); saveScene(); });
 $('#exportScene').addEventListener('click', exportGlb);
 $('#importScene').addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => { importFile(fileInput.files?.[0]); fileInput.value = ''; });
@@ -677,6 +966,7 @@ $('#assetsToggle').addEventListener('click', () => { $('#assetsPanel').hidden = 
 $('#assetsClose').addEventListener('click', () => { $('#assetsPanel').hidden = true; });
 document.querySelectorAll('[data-asset]').forEach((button) => button.addEventListener('click', () => addAsset(button.dataset.asset)));
 $('#addKeyframe').addEventListener('click', () => {
+  if (importedAnimationAction) stopImportedClipPreservingPose();
   if (!animationMode) { animationMode = true; document.body.classList.add('animating'); $('#animationPanel').hidden = false; $('#animationTimeline').hidden = false; $('#animMode').innerHTML = 'Animation <span>⌄</span>'; }
   if (!activeAnimationTarget) activeAnimationTarget = boneTarget || selected;
   if (!activeAnimationTarget && currentModel) { boneTarget = allBones()[0] || null; activeAnimationTarget = boneTarget; }
@@ -715,14 +1005,15 @@ document.querySelectorAll('[data-tool]').forEach((button) => button.addEventList
   } else window.editorGizmo?.detach();
 }));
 
-// Initial layout is sized before the first render, then create a visible object as a startup smoke signal.
+// Open the project library first; the editor initializes only after the user opens/creates a project.
 resize();
-addObject('Cubo');
+renderProjectCards();
 function frame() {
   requestAnimationFrame(frame);
   orbit.update();
   lightPostPass.uniforms.time.value += 0.016;
-  if (postEnabled) composer.render();
-  else renderer.render(scene, camera);
+  if (importedMixer && importedAnimationAction) importedMixer.update(1 / 60);
+  if (postEnabled) { sceneRenderPass.camera = cameraMode ? activeCamera : camera; composer.render(); }
+  else renderer.render(scene, cameraMode ? activeCamera : camera);
 }
 frame();
