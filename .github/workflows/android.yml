@@ -40,6 +40,13 @@ jobs:
           cmdline-tools-version: 11076708
           packages: platform-tools
 
+      - name: Install Android platform and build tools
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/12.0/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null
+          "$SDKMANAGER" "platforms;android-35"
+          "$SDKMANAGER" "build-tools;35.0.0"
+
       - name: Install dependencies and build web app
         run: |
           npm install
