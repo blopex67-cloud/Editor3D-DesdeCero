@@ -49,11 +49,17 @@ function showFatal(message) {
 }
 window.addEventListener('error', (event) => {
   const message = event.message || 'error de JavaScript';
-  // Android WebView can emit this benign observer warning after a viewport relayout.
   if (message.includes('ResizeObserver loop')) return;
-  showFatal(message);
+  console.error('Editor runtime error:', event.error || message);
+  if (renderer) toast(`Error del editor: ${message}`);
+  else showFatal(message);
 });
-window.addEventListener('unhandledrejection', (event) => showFatal(event.reason?.message || 'error al cargar un módulo'));
+window.addEventListener('unhandledrejection', (event) => {
+  const message = event.reason?.message || String(event.reason || 'error al cargar un módulo');
+  console.error('Editor async error:', event.reason);
+  if (renderer) toast(`Error del editor: ${message}`);
+  else showFatal(message);
+});
 
 try {
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
@@ -361,6 +367,8 @@ function updateBoneMarkers() {
   currentModel.updateMatrixWorld(true);
   const viewRect = container.getBoundingClientRect();
   for (const [bone, dot] of boneDots) {
+    if (!animationMode) { dot.hidden = true; continue; }
+    dot.hidden = false;
     const world = bone.getWorldPosition(new THREE.Vector3());
     world.project(camera);
     const x = (world.x * 0.5 + 0.5) * viewRect.width;
@@ -381,6 +389,7 @@ function makeBoneMarkers(model) {
   bones.forEach((bone, index) => {
     const dot = document.createElement('button');
     dot.className = 'bone-dot';
+    dot.hidden = !animationMode;
     dot.type = 'button';
     dot.textContent = '•';
     dot.title = bone.name || `Bone ${index + 1}`;
@@ -469,6 +478,7 @@ function toggleAnimationMode() {
   if (animationMode) {
     rebuildTimeline();
     if (currentModel) refreshBoneList();
+    updateBoneMarkers();
     activeAnimationTarget = boneTarget || selected;
     hint.textContent = 'Modo animación · selecciona un hueso y agrega keyframes';
     if (boneTarget) { window.editorGizmo?.attach(boneTarget); window.editorGizmo?.setMode('rotate'); }
@@ -479,14 +489,27 @@ function toggleAnimationMode() {
     hint.textContent = 'Arrastra para orbitar · pellizca para acercar';
   }
 }
+function vectorValues(value, fallback, size) {
+  if (Array.isArray(value) && value.length >= size && value.slice(0, size).every(Number.isFinite)) return value.slice(0, size);
+  if (value && typeof value.toArray === 'function') {
+    const result = value.toArray();
+    if (Array.isArray(result) && result.length >= size && result.slice(0, size).every(Number.isFinite)) return result.slice(0, size);
+  }
+  return fallback.slice();
+}
 function readTransform(node) {
-  return { position: node.position.toArray(), quaternion: node.quaternion.toArray(), scale: node.scale.toArray() };
+  return {
+    position: vectorValues(node?.position, [0, 0, 0], 3),
+    quaternion: vectorValues(node?.quaternion, [0, 0, 0, 1], 4),
+    scale: vectorValues(node?.scale, [1, 1, 1], 3)
+  };
 }
 function writeTransform(node, state) {
   if (!node || !state) return;
-  node.position.fromArray(state.position);
-  node.quaternion.fromArray(state.quaternion);
-  node.scale.fromArray(state.scale);
+  const safe = readTransform({ position: state.position, quaternion: state.quaternion, scale: state.scale });
+  node.position.fromArray(safe.position);
+  node.quaternion.fromArray(safe.quaternion).normalize();
+  node.scale.fromArray(safe.scale);
 }
 function captureKeyframe() {
   const frame = Math.max(0, Math.min(120, Number($('#frameNumber').value) || currentFrame));
@@ -527,9 +550,11 @@ function interpolatePose(frame) {
     after ||= available.at(-1);
     const [f0, start] = before, [f1, end] = after;
     const t = f0 === f1 ? 0 : THREE.MathUtils.clamp((frame - f0) / (f1 - f0), 0, 1);
-    node.position.lerpVectors(new THREE.Vector3(...start.position), new THREE.Vector3(...end.position), t);
-    node.scale.lerpVectors(new THREE.Vector3(...start.scale), new THREE.Vector3(...end.scale), t);
-    node.quaternion.copy(new THREE.Quaternion(...start.quaternion)).slerp(new THREE.Quaternion(...end.quaternion), t);
+    const from = readTransform({ position: start.position, quaternion: start.quaternion, scale: start.scale });
+    const to = readTransform({ position: end.position, quaternion: end.quaternion, scale: end.scale });
+    node.position.lerpVectors(new THREE.Vector3(...from.position), new THREE.Vector3(...to.position), t);
+    node.scale.lerpVectors(new THREE.Vector3(...from.scale), new THREE.Vector3(...to.scale), t);
+    node.quaternion.copy(new THREE.Quaternion(...from.quaternion)).slerp(new THREE.Quaternion(...to.quaternion), t).normalize();
   }
   updateBoneMarkers();
 }
