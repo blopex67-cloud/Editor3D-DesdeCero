@@ -107,6 +107,7 @@ ground.receiveShadow = true;
 scene.add(ground);
 
 const composer = new EffectComposer(renderer);
+composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 0.9)); // Lower-resolution post FX for mobile GPUs.
 composer.addPass(new RenderPass(scene, camera));
 const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.24, 0.35, 0.88);
 composer.addPass(bloomPass);
@@ -130,6 +131,10 @@ function updateStatus() {
   $('#status').textContent = `${objects.length} objeto${objects.length === 1 ? '' : 's'}`;
 }
 function addAsset(kind) {
+  if (kind === 'point' || kind === 'directional') {
+    const liveLights = assetObjects.filter((asset) => asset.isPointLight || asset.isDirectionalLight).length;
+    if (liveLights >= 4) { toast('Límite móvil: usa hasta 4 luces locales'); return; }
+  }
   const suffix = ++assetCount;
   if (kind === 'cube' || kind === 'sphere' || kind === 'plane') {
     const name = kind === 'cube' ? 'Cubo' : kind === 'sphere' ? 'Esfera' : 'Plano';
@@ -160,6 +165,7 @@ function addAsset(kind) {
     const helper = new THREE.PointLightHelper(object, 0.14, '#59dfff');
     object.userData.helper = helper;
     scene.add(helper);
+    object.userData.helper.update();
   } else if (kind === 'directional') {
     object = new THREE.DirectionalLight(0xffffff, 1.2);
     object.position.set(3, 5, 2);
@@ -169,6 +175,7 @@ function addAsset(kind) {
     const helper = new THREE.DirectionalLightHelper(object, 0.35, '#59dfff');
     object.userData.helper = helper;
     scene.add(helper);
+    object.userData.helper.update();
   } else if (kind === 'ambient') {
     object = new THREE.HemisphereLight(0xe1efff, 0x51505a, 0.7);
     object.name = `Luz ambiente ${suffix}`;
@@ -206,12 +213,12 @@ function select(object) {
   selected = object;
   if (window.editorGizmo) {
     const target = animationMode && boneTarget ? boneTarget : object;
-    if (target && activeTool !== 'select') {
+    if (target && animationMode) {
       window.editorGizmo.attach(target);
-      window.editorGizmo.setMode(activeTool);
-    } else if (target && animationMode) {
+      window.editorGizmo.setMode(activeTool === 'select' ? 'rotate' : activeTool);
+    } else if (target) {
       window.editorGizmo.attach(target);
-      window.editorGizmo.setMode('translate');
+      window.editorGizmo.setMode(activeTool === 'select' ? 'translate' : activeTool);
     } else window.editorGizmo.detach();
   }
   refreshList();
@@ -345,6 +352,7 @@ function allBones() {
 function updateBoneMarkers() {
   const layer = $('#boneMarkers');
   if (!layer || !currentModel) return;
+  camera.updateMatrixWorld();
   currentModel.updateMatrixWorld(true);
   const viewRect = container.getBoundingClientRect();
   for (const [bone, dot] of boneDots) {
@@ -478,13 +486,14 @@ function writeTransform(node, state) {
 function captureKeyframe() {
   const frame = Math.max(0, Math.min(120, Number($('#frameNumber').value) || currentFrame));
   currentFrame = frame;
-  const pose = keyframes.get(frame) || new Map();
   const target = activeAnimationTarget || boneTarget || selected;
-  if (target) pose.set(target.uuid, readTransform(target));
+  if (!target) { toast('Selecciona un objeto o hueso'); return; }
+  const pose = keyframes.get(frame) || new Map();
+  pose.set(target.uuid, readTransform(target));
   keyframes.set(frame, pose);
   rebuildTimeline();
   updateFrameControls();
-  toast(`Keyframe guardado · ${frame}`);
+  toast(`Keyframe de ${target.name || 'objeto'} · fotograma ${frame}`);
 }
 function poseAt(frame, pose) {
   for (const object of objects) if (pose.has(object.uuid)) writeTransform(object, pose.get(object.uuid));
@@ -498,10 +507,30 @@ function updateFrameControls() {
   if (cursor) cursor.style.left = `${(currentFrame / 120) * 100}%`;
   updateKeyMarkers();
 }
+function interpolatePose(frame) {
+  const animatedNodes = new Map();
+  for (const pose of keyframes.values()) for (const [uuid] of pose) animatedNodes.set(uuid, true);
+  const nodes = new Map([...objects, ...allBones()].map((node) => [node.uuid, node]));
+  for (const uuid of animatedNodes.keys()) {
+    const node = nodes.get(uuid);
+    if (!node) continue;
+    const available = [...keyframes.entries()].filter(([, pose]) => pose.has(uuid)).sort((a, b) => a[0] - b[0]);
+    if (!available.length) continue;
+    let before = available.filter(([at]) => at <= frame).at(-1);
+    let after = available.find(([at]) => at >= frame);
+    before ||= available[0];
+    after ||= available.at(-1);
+    const [f0, start] = before, [f1, end] = after;
+    const t = f0 === f1 ? 0 : THREE.MathUtils.clamp((frame - f0) / (f1 - f0), 0, 1);
+    node.position.lerpVectors(new THREE.Vector3(...start.position), new THREE.Vector3(...end.position), t);
+    node.scale.lerpVectors(new THREE.Vector3(...start.scale), new THREE.Vector3(...end.scale), t);
+    node.quaternion.copy(new THREE.Quaternion(...start.quaternion)).slerp(new THREE.Quaternion(...end.quaternion), t);
+  }
+  updateBoneMarkers();
+}
 function setFrame(frame) {
   currentFrame = Math.max(0, Math.min(120, Number(frame) || 0));
-  const saved = keyframes.get(currentFrame);
-  if (saved) poseAt(currentFrame, saved);
+  interpolatePose(currentFrame);
   updateFrameControls();
 }
 function togglePlayback() {
@@ -510,23 +539,7 @@ function togglePlayback() {
   clearInterval(playTimer);
   if (isPlaying) playTimer = setInterval(() => {
     currentFrame = currentFrame >= 120 ? 0 : currentFrame + 1;
-    const frames = [...keyframes.keys()].sort((a, b) => a - b);
-    if (frames.length) {
-      let before = frames.filter((f) => f <= currentFrame).at(-1);
-      let after = frames.find((f) => f >= currentFrame);
-      if (before === undefined) before = frames[0];
-      if (after === undefined) after = frames.at(-1);
-      const a = keyframes.get(before), b = keyframes.get(after);
-      const t = before === after ? 0 : (currentFrame - before) / (after - before);
-      for (const node of [...objects, ...allBones()]) {
-        const start = a.get(node.uuid), end = b.get(node.uuid);
-        if (!start || !end) continue;
-        node.position.lerpVectors(new THREE.Vector3(...start.position), new THREE.Vector3(...end.position), t);
-        node.scale.lerpVectors(new THREE.Vector3(...start.scale), new THREE.Vector3(...end.scale), t);
-        node.quaternion.copy(new THREE.Quaternion(...start.quaternion)).slerp(new THREE.Quaternion(...end.quaternion), t);
-      }
-      updateBoneMarkers();
-    }
+    interpolatePose(currentFrame);
     updateFrameControls();
   }, 40);
 }
