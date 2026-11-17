@@ -50,13 +50,20 @@ jobs:
           npx cap sync android
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('android/app/src/main/AndroidManifest.xml')
-          text = p.read_text()
-          if 'android:screenOrientation=' not in text:
-              text = text.replace('<activity ', '<activity android:screenOrientation="landscape" ', 1)
-          else:
-              text = text.replace('android:screenOrientation="unspecified"', 'android:screenOrientation="landscape"')
-          p.write_text(text)
+          import xml.etree.ElementTree as ET
+          path = Path('android/app/src/main/AndroidManifest.xml')
+          tree = ET.parse(path)
+          root = tree.getroot()
+          ns = '{http://schemas.android.com/apk/res/android}'
+          activity = next((e for e in root.findall('application/activity') if e.attrib.get(ns+'name','').endswith('MainActivity')), None)
+          if activity is None:
+              raise SystemExit('MainActivity not found in generated Android manifest')
+          activity.set(ns+'screenOrientation', 'landscape')
+          activity.set(ns+'configChanges', 'orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode')
+          tree.write(path, encoding='utf-8', xml_declaration=True)
+          checked = ET.parse(path).getroot().find('application/activity')
+          assert checked is not None and checked.attrib.get(ns+'screenOrientation') == 'landscape'
+          print('Verified MainActivity orientation: landscape')
           PY
           cd android
           chmod +x gradlew
@@ -68,6 +75,10 @@ jobs:
           test -s "$APK"
           sha256sum "$APK" | tee android/app/build/outputs/apk/debug/sha256.txt
           file "$APK"
+          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt -print -quit)"
+          test -n "$AAPT"
+          "$AAPT" dump badging "$APK" | tee android/app/build/outputs/apk/debug/apk-badging.txt
+          grep -E "screenOrientation='landscape'" android/app/build/outputs/apk/debug/apk-badging.txt
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
