@@ -28,7 +28,11 @@ let isPlaying = false;
 let playTimer = null;
 let currentModel = null;
 let boneTarget = null;
+let activeAnimationTarget = null;
+let assetCount = 0;
 const keyframes = new Map();
+const boneDots = new Map();
+const assetObjects = [];
 const objects = [];
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -64,7 +68,22 @@ try {
   orbit.maxDistance = 40;
   const gizmo = new TransformControls(camera, renderer.domElement);
   scene.add(gizmo.getHelper());
+  gizmo.setSize(0.8);
   gizmo.addEventListener('dragging-changed', (event) => { orbit.enabled = !event.value; });
+  gizmo.addEventListener('change', () => updateBoneMarkers());
+  gizmo.getHelper().traverse((node) => {
+    if (!node.material) return;
+    const materials = Array.isArray(node.material) ? node.material : [node.material];
+    for (const material of materials) {
+      if (material.color) material.color.set('#52e5ff');
+      if ('emissive' in material) { material.emissive.set('#05bce8'); material.emissiveIntensity = 1.4; }
+      material.depthTest = false;
+      material.transparent = true;
+      material.opacity = 0.98;
+      material.needsUpdate = true;
+    }
+    node.renderOrder = 999;
+  });
   gizmo.addEventListener('objectChange', () => { renderProperties(); });
   window.editorGizmo = gizmo;
 } catch (error) {
@@ -76,7 +95,7 @@ try {
 scene.add(new THREE.HemisphereLight(0xdce9ff, 0x48434a, 2));
 const sun = new THREE.DirectionalLight(0xffffff, 2.6);
 sun.position.set(5, 9, 6);
-sun.castShadow = true;
+sun.castShadow = false; // Mobile-friendly default: avoid expensive dynamic shadow maps.
 scene.add(sun);
 const grid = new THREE.GridHelper(20, 40, 0x96999d, 0x606266);
 grid.position.y = -0.01;
@@ -109,6 +128,61 @@ function toast(message) {
 }
 function updateStatus() {
   $('#status').textContent = `${objects.length} objeto${objects.length === 1 ? '' : 's'}`;
+}
+function addAsset(kind) {
+  const suffix = ++assetCount;
+  if (kind === 'cube' || kind === 'sphere' || kind === 'plane') {
+    const name = kind === 'cube' ? 'Cubo' : kind === 'sphere' ? 'Esfera' : 'Plano';
+    const geometry = kind === 'cube' ? new THREE.BoxGeometry(1.15, 1.15, 1.15) : kind === 'sphere' ? new THREE.SphereGeometry(0.62, 24, 16) : new THREE.PlaneGeometry(1.5, 1.5);
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: '#dedfe1', roughness: 0.62, metalness: 0.02 }));
+    mesh.name = `${name} ${suffix}`;
+    mesh.position.set(0, kind === 'plane' ? 0.2 : 0.65, 0);
+    mesh.userData.kind = name;
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    scene.add(mesh); objects.push(mesh); select(mesh); rebuildTimeline(); updateStatus();
+    return;
+  }
+  let object;
+  if (kind === 'camera') {
+    object = new THREE.PerspectiveCamera(50, camera.aspect, 0.1, 100);
+    object.position.set(3, 2.5, 4);
+    object.name = `Cámara ${suffix}`;
+    object.userData.kind = 'Cámara';
+    const helper = new THREE.CameraHelper(object);
+    object.userData.helper = helper;
+    scene.add(helper);
+  } else if (kind === 'point') {
+    object = new THREE.PointLight(0xffffff, 2.2, 10, 2);
+    object.position.set(1.5, 2.2, 1.5);
+    object.name = `Luz puntual ${suffix}`;
+    object.castShadow = false;
+    object.userData.kind = 'Luz puntual';
+    const helper = new THREE.PointLightHelper(object, 0.14, '#59dfff');
+    object.userData.helper = helper;
+    scene.add(helper);
+  } else if (kind === 'directional') {
+    object = new THREE.DirectionalLight(0xffffff, 1.2);
+    object.position.set(3, 5, 2);
+    object.name = `Luz direccional ${suffix}`;
+    object.castShadow = false;
+    object.userData.kind = 'Luz direccional';
+    const helper = new THREE.DirectionalLightHelper(object, 0.35, '#59dfff');
+    object.userData.helper = helper;
+    scene.add(helper);
+  } else if (kind === 'ambient') {
+    object = new THREE.HemisphereLight(0xe1efff, 0x51505a, 0.7);
+    object.name = `Luz ambiente ${suffix}`;
+    object.userData.kind = 'Luz ambiente';
+  }
+  if (!object) return;
+  object.userData.asset = true;
+  scene.add(object);
+  assetObjects.push(object);
+  objects.push(object);
+  select(object);
+  rebuildTimeline();
+  updateStatus();
+  toast(`${object.userData.kind} agregada`);
 }
 function refreshList() {
   list.replaceChildren();
@@ -145,8 +219,8 @@ function select(object) {
   refreshBoneList();
 }
 function addObject(kind = 'Cubo', position = [0, 0.65, 0], color = null) {
-  const geometry = kind === 'Esfera'
-    ? new THREE.SphereGeometry(0.62, 32, 24)
+  const geometry = kind === 'Esfera' ? new THREE.SphereGeometry(0.62, 24, 16)
+    : kind === 'Plano' ? new THREE.PlaneGeometry(1.5, 1.5)
     : new THREE.BoxGeometry(1.15, 1.15, 1.15);
   const material = new THREE.MeshStandardMaterial({
     color: color || (kind === 'Esfera' ? '#66c8ff' : '#e5e5e5'),
@@ -251,7 +325,7 @@ function importFile(file) {
     model.name = safeName(file.name.replace(/\.(glb|gltf)$/i, ''));
     model.userData.kind = 'Modelo';
     model.traverse((child) => { if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; } });
-    scene.add(model); objects.push(model); currentModel = model; boneTarget = null; select(model); refreshBoneList(); updateStatus(); toast(allBones().length ? `Modelo importado · ${allBones().length} huesos` : 'Modelo importado · sin armature'); URL.revokeObjectURL(url);
+    scene.add(model); objects.push(model); currentModel = model; boneTarget = null; select(model); makeBoneMarkers(model); rebuildTimeline(); updateStatus(); toast(allBones().length ? `Modelo importado · ${allBones().length} huesos` : 'Modelo importado · sin armature'); URL.revokeObjectURL(url);
   }, undefined, () => { URL.revokeObjectURL(url); toast('No se pudo importar el modelo'); });
 }
 function exportGlb() {
@@ -268,27 +342,107 @@ function allBones() {
   currentModel?.traverse((node) => { if (node.isBone) found.push(node); });
   return found;
 }
+function updateBoneMarkers() {
+  const layer = $('#boneMarkers');
+  if (!layer || !currentModel) return;
+  currentModel.updateMatrixWorld(true);
+  const viewRect = container.getBoundingClientRect();
+  for (const [bone, dot] of boneDots) {
+    const world = bone.getWorldPosition(new THREE.Vector3());
+    world.project(camera);
+    const x = (world.x * 0.5 + 0.5) * viewRect.width;
+    const y = (-world.y * 0.5 + 0.5) * viewRect.height;
+    const visible = world.z > -1 && world.z < 1 && x >= 0 && x <= viewRect.width && y >= 0 && y <= viewRect.height;
+    dot.style.display = visible ? 'grid' : 'none';
+    if (visible) dot.style.transform = `translate(${x - 9}px,${y - 9}px)`;
+    dot.classList.toggle('selected', bone === boneTarget);
+  }
+}
+function makeBoneMarkers(model) {
+  const layer = $('#boneMarkers');
+  layer.replaceChildren();
+  boneDots.clear();
+  model.updateMatrixWorld(true);
+  const bones = [];
+  model.traverse((node) => { if (node.isBone) bones.push(node); });
+  bones.forEach((bone, index) => {
+    const dot = document.createElement('button');
+    dot.className = 'bone-dot';
+    dot.type = 'button';
+    dot.textContent = '•';
+    dot.title = bone.name || `Bone ${index + 1}`;
+    dot.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault(); selectBone(bone); });
+    layer.append(dot);
+    boneDots.set(bone, dot);
+  });
+  refreshBoneList();
+  updateBoneMarkers();
+}
+function selectBone(bone) {
+  boneTarget = bone;
+  activeAnimationTarget = bone;
+  window.editorGizmo?.attach(bone);
+  window.editorGizmo?.setMode(activeTool === 'select' ? 'rotate' : activeTool);
+  $('#timelineTrackName').textContent = bone.name || 'Bone';
+  if (!animationMode) toggleAnimationMode();
+  document.querySelectorAll('.anim-track').forEach((track) => track.classList.toggle('selected', track.dataset.uuid === bone.uuid));
+  refreshBoneList();
+  updateBoneMarkers();
+}
+function makeAnimTrack(node, title) {
+  const track = document.createElement('div');
+  track.className = 'anim-track';
+  track.dataset.uuid = node.uuid;
+  track.type = 'button';
+  track.innerHTML = `<span class="track-label"></span><span class="track-keys"></span>`;
+  track.querySelector('.track-label').textContent = title;
+  track.addEventListener('click', () => { activeAnimationTarget = node; if (node.isBone) selectBone(node); else { selected = node; $('#timelineTrackName').textContent = node.name; window.editorGizmo?.attach(node); document.querySelectorAll('.anim-track').forEach((item) => item.classList.toggle('selected', item === track)); } });
+  $('#timelineRuler').append(track);
+}
+function rebuildTimeline() {
+  const ruler = $('#timelineRuler');
+  ruler.replaceChildren();
+  const cursor = document.createElement('i');
+  cursor.id = 'timelineCursor';
+  ruler.append(cursor);
+  for (const frame of [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]) {
+    const tick = document.createElement('span');
+    tick.className = 'ruler-tick';
+    tick.style.left = `${frame / 120 * 100}%`;
+    tick.textContent = String(frame);
+    ruler.append(tick);
+  }
+  if (currentModel) for (const bone of allBones()) makeAnimTrack(bone, bone.name || 'Bone');
+  if (!currentModel) for (const object of objects) makeAnimTrack(object, object.name);
+  updateKeyMarkers();
+}
+function updateKeyMarkers() {
+  document.querySelectorAll('.anim-track').forEach((track) => {
+    track.querySelectorAll('.key-dot').forEach((marker) => marker.remove());
+    for (const [frame, pose] of keyframes) {
+      if (!pose.has(track.dataset.uuid)) continue;
+      const marker = document.createElement('i');
+      marker.className = 'key-dot';
+      marker.style.left = `${(frame / 120) * 100}%`;
+      track.append(marker);
+    }
+  });
+}
 function refreshBoneList() {
   const panel = $('#boneList');
   if (!panel) return;
   panel.replaceChildren();
   const bones = allBones();
   if (!currentModel || bones.length === 0) {
-    panel.textContent = 'Importa un GLB riggeado para editar huesos';
+    panel.textContent = 'Sin esqueleto';
     return;
   }
   for (const bone of bones) {
     const row = document.createElement('div');
     row.className = `bone-row${bone === boneTarget ? ' selected' : ''}`;
     const pick = document.createElement('button');
-    pick.textContent = `🦴 ${bone.name || 'Hueso'}`;
-    pick.addEventListener('click', () => {
-      boneTarget = bone;
-      window.editorGizmo?.attach(bone);
-      window.editorGizmo?.setMode('rotate');
-      refreshBoneList();
-      toast(`Hueso: ${bone.name || 'Hueso'}`);
-    });
+    pick.textContent = `● ${bone.name || 'Hueso'}`;
+    pick.addEventListener('click', () => selectBone(bone));
     row.append(pick);
     panel.append(row);
   }
@@ -297,9 +451,12 @@ function toggleAnimationMode() {
   animationMode = !animationMode;
   document.body.classList.toggle('animating', animationMode);
   $('#animationPanel').hidden = !animationMode;
-  $('#animMode').innerHTML = animationMode ? 'Pose Mode <span>⌄</span>' : 'Object Mode <span>⌄</span>';
+  $('#animationTimeline').hidden = !animationMode;
+  $('#animMode').innerHTML = animationMode ? 'Animation <span>⌄</span>' : 'Object Mode <span>⌄</span>';
   if (animationMode) {
+    rebuildTimeline();
     if (currentModel) refreshBoneList();
+    activeAnimationTarget = boneTarget || selected;
     hint.textContent = 'Modo animación · selecciona un hueso y agrega keyframes';
     if (boneTarget) { window.editorGizmo?.attach(boneTarget); window.editorGizmo?.setMode('rotate'); }
   } else {
@@ -321,30 +478,25 @@ function writeTransform(node, state) {
 function captureKeyframe() {
   const frame = Math.max(0, Math.min(120, Number($('#frameNumber').value) || currentFrame));
   currentFrame = frame;
-  const pose = new Map();
-  for (const object of objects) pose.set(object.uuid, readTransform(object));
-  for (const bone of allBones()) pose.set(bone.uuid, readTransform(bone));
+  const pose = keyframes.get(frame) || new Map();
+  const target = activeAnimationTarget || boneTarget || selected;
+  if (target) pose.set(target.uuid, readTransform(target));
   keyframes.set(frame, pose);
+  rebuildTimeline();
   updateFrameControls();
   toast(`Keyframe guardado · ${frame}`);
 }
 function poseAt(frame, pose) {
   for (const object of objects) if (pose.has(object.uuid)) writeTransform(object, pose.get(object.uuid));
   for (const bone of allBones()) if (pose.has(bone.uuid)) writeTransform(bone, pose.get(bone.uuid));
+  updateBoneMarkers();
 }
 function updateFrameControls() {
   $('#frameRange').value = String(currentFrame);
   $('#frameNumber').value = String(currentFrame);
-  const panel = $('#animationPanel');
-  panel?.querySelectorAll('.frame-tick').forEach((node) => node.remove());
-  for (const frame of keyframes.keys()) {
-    const tick = document.createElement('span');
-    tick.className = 'frame-tick';
-    tick.textContent = '◆';
-    tick.title = `Keyframe ${frame}`;
-    tick.style.left = `${(frame / 120) * 100}%`;
-    $('#frameRange').parentElement.append(tick);
-  }
+  const cursor = $('#timelineCursor');
+  if (cursor) cursor.style.left = `${(currentFrame / 120) * 100}%`;
+  updateKeyMarkers();
 }
 function setFrame(frame) {
   currentFrame = Math.max(0, Math.min(120, Number(frame) || 0));
@@ -369,10 +521,11 @@ function togglePlayback() {
       for (const node of [...objects, ...allBones()]) {
         const start = a.get(node.uuid), end = b.get(node.uuid);
         if (!start || !end) continue;
-        node.position.fromArray(start.position).lerp(new THREE.Vector3(...end.position), t);
-        node.scale.fromArray(start.scale).lerp(new THREE.Vector3(...end.scale), t);
-        node.quaternion.fromArray(start.quaternion).slerp(new THREE.Quaternion(...end.quaternion), t);
+        node.position.lerpVectors(new THREE.Vector3(...start.position), new THREE.Vector3(...end.position), t);
+        node.scale.lerpVectors(new THREE.Vector3(...start.scale), new THREE.Vector3(...end.scale), t);
+        node.quaternion.copy(new THREE.Quaternion(...start.quaternion)).slerp(new THREE.Quaternion(...end.quaternion), t);
       }
+      updateBoneMarkers();
     }
     updateFrameControls();
   }, 40);
@@ -410,6 +563,9 @@ $('#gridToggle').addEventListener('click', () => { gridVisible = !gridVisible; g
 $('#frame').addEventListener('click', () => { orbit.target.set(0, 0.6, 0); camera.position.set(5, 4, 7); orbit.update(); });
 $('#undo').addEventListener('click', () => toast('Deshacer todavía no está disponible'));
 $('#animMode').addEventListener('click', toggleAnimationMode);
+$('#assetsToggle').addEventListener('click', () => { $('#assetsPanel').hidden = !$('#assetsPanel').hidden; });
+$('#assetsClose').addEventListener('click', () => { $('#assetsPanel').hidden = true; });
+document.querySelectorAll('[data-asset]').forEach((button) => button.addEventListener('click', () => addAsset(button.dataset.asset)));
 $('#addKeyframe').addEventListener('click', captureKeyframe);
 $('#playAnimation').addEventListener('click', togglePlayback);
 $('#frameRange').addEventListener('input', (event) => setFrame(event.target.value));
