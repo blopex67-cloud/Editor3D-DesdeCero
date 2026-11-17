@@ -47,7 +47,12 @@ function showFatal(message) {
   box.textContent = `No se pudo iniciar el visor 3D: ${message}`;
   container?.append(box);
 }
-window.addEventListener('error', (event) => showFatal(event.message || 'error de JavaScript'));
+window.addEventListener('error', (event) => {
+  const message = event.message || 'error de JavaScript';
+  // Android WebView can emit this benign observer warning after a viewport relayout.
+  if (message.includes('ResizeObserver loop')) return;
+  showFatal(message);
+});
 window.addEventListener('unhandledrejection', (event) => showFatal(event.reason?.message || 'error al cargar un módulo'));
 
 try {
@@ -551,7 +556,14 @@ function resize() {
   camera.aspect = rect.width / rect.height;
   camera.updateProjectionMatrix();
 }
-new ResizeObserver(resize).observe(container);
+let resizeObserverFrame = 0;
+new ResizeObserver(() => {
+  if (resizeObserverFrame) return;
+  resizeObserverFrame = requestAnimationFrame(() => {
+    resizeObserverFrame = 0;
+    resize();
+  });
+}).observe(container);
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 250));
 renderer.domElement.addEventListener('pointerdown', (event) => {
