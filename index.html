@@ -7,13 +7,18 @@
   <title>Editor 3D</title>
 </head>
 <body>
-  <div id="app">
+  <div id="projectHome" class="project-home">
+    <header class="home-header"><div class="home-logo">⬡</div><div><b>Editor 3D</b><small>Proyectos</small></div><button id="createProject">＋ Nuevo proyecto</button></header>
+    <section class="home-content"><div class="home-title"><h1>Mis proyectos</h1><p>Crea una escena nueva o retoma tu trabajo.</p></div><div class="project-grid" id="projectGrid"></div><div class="empty-projects" id="emptyProjects"><div>▧</div><b>Aún no hay proyectos</b><span>Crea tu primer proyecto para empezar.</span><button id="createProjectEmpty">＋ Crear proyecto</button></div><div class="project-dialog" id="projectDialog" hidden><div class="project-dialog-card"><b>Nuevo proyecto</b><span>Dale un nombre a tu escena 3D.</span><input id="projectNameInput" type="text" maxlength="40" placeholder="Mi proyecto 3D"><div><button id="cancelProject">Cancelar</button><button id="confirmProject">Crear proyecto</button></div></div></div></section>
+  </div>
+  <div id="app" hidden>
     <header class="topbar">
       <div class="brand-zone">
         <button class="brand" id="home" title="Editor 3D"><span class="logo">⬡</span></button>
         <button id="save" title="Guardar escena">▣</button>
         <button id="importScene" title="Importar escena">▧</button>
-        <button id="exportScene" title="Exportar escena">⇧</button>
+        <button id="exportScene" title="Exportar GLB">⇧</button>
+        <button id="openProjects" title="Volver a proyectos">⌂</button>
       </div>
       <button class="mode" id="animMode">Object Mode <span>⌄</span></button>
       <div class="top-actions">
@@ -38,10 +43,11 @@
         <div class="view-label"><strong>Object Mode</strong><span id="hint">Arrastra para orbitar · pellizca para acercar</span></div>
         <div id="scene"></div>
         <div class="left-overlay"><button title="Mover">✣</button><button title="Girar">⟳</button></div>
-        <div class="right-overlay"><button title="Vista cámara">◉</button><button title="Vista escena">◈</button></div>
+        <div class="right-overlay"><button id="enterCamera" title="Mirar por cámara seleccionada">◉ Cámara</button><button id="exitCamera" title="Volver a vista libre" hidden>◈ Salir</button><button id="selectCameraView" title="Elegir cámara activa">▣</button></div>
         <div class="bone-markers" id="boneMarkers"></div>
         <aside class="assets-panel" id="assetsPanel" hidden><div class="assets-head"><b>ASSETS</b><button id="assetsClose">×</button></div><div class="asset-group"><span>ILUMINACIÓN OPTIMIZADA</span><button data-asset="point"><img src="icons/lightbulb.svg" alt=""> Luz puntual</button><button data-asset="directional"><img src="icons/lightbulb.svg" alt=""> Luz direccional</button><button data-asset="ambient"><img src="icons/lightbulb.svg" alt=""> Luz ambiente</button></div><div class="asset-group"><span>CÁMARAS</span><button data-asset="camera"><img src="icons/camera.svg" alt=""> Cámara</button></div><div class="asset-group"><span>MESHES</span><button data-asset="cube"><img src="icons/box.svg" alt=""> Cubo</button><button data-asset="sphere"><img src="icons/circle.svg" alt=""> Esfera</button><button data-asset="plane"><img src="icons/grid-3x3.svg" alt=""> Plano</button></div><p>Luces eficientes: sin sombras dinámicas por defecto.</p></aside>
-        <div class="view-tools"><button id="frame" title="Centrar vista">⊙</button><button id="gridToggle" title="Cuadrícula">▦</button><button id="postToggle" title="Postprocesado PBR liviano">RA</button></div>
+        <div class="view-tools"><button id="frame" title="Centrar vista">⊙</button><button id="gridToggle" title="Cuadrícula">▦</button><button id="postToggle" title="Postprocesado PBR liviano">RA</button><button id="renderOpen" title="Render">Render</button></div>
+        <section class="render-panel" id="renderPanel" hidden><div class="assets-head"><b>RENDER / EXPORTAR</b><button id="renderClose">×</button></div><label>Formato<select id="renderFormat"><option value="png">Imagen PNG</option><option value="mp4">Video MP4</option></select></label><label>Resolución<select id="renderResolution"><option value="screen">Tamaño del visor</option><option value="1080">1920 × 1080</option><option value="720">1280 × 720</option></select></label><label>Duración MP4 (seg)<input id="renderDuration" type="number" min="1" max="15" value="5"></label><label>Ruta / carpeta<input id="renderPath" type="text" readonly placeholder="Aún no elegida"></label><button id="chooseRenderPath">Elegir carpeta…</button><button id="startRender">Exportar PNG</button><small id="renderStatus">La carpeta elegida se recuerda en este dispositivo.</small></section>
         <section class="animation-timeline" id="animationTimeline" hidden>
           <div class="timeline-title"><b>ANIMACIÓN</b><span id="timelineTrackName">Sin pista seleccionada</span><button id="addKeyframe" title="Insertar keyframe">◆ Key</button></div>
           <div class="timeline-controls"><button id="playAnimation">▶</button><button id="prevFrame">◀</button><input id="frameRange" type="range" min="0" max="120" value="0"><button id="nextFrame">▶</button><label>F <input id="frameNumber" type="number" min="0" max="120" value="0"></label></div>
