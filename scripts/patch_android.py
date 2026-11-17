@@ -89,11 +89,19 @@ public class RenderExportPlugin extends Plugin {{
 ''')
 if 'import ' + package + '.RenderExportPlugin;' not in text:
     text = text.replace(match.group(0), match.group(0) + '\n\nimport ' + package + '.RenderExportPlugin;')
+if 'import android.os.Bundle;' not in text:
+    text = text.replace(match.group(0), match.group(0) + '\nimport android.os.Bundle;')
 if 'registerPlugin(RenderExportPlugin.class)' not in text:
     on_create = re.search(r'(protected|public)\s+void\s+onCreate\s*\([^)]*\)\s*\{', text)
-    if not on_create:
-        raise SystemExit('Could not find MainActivity.onCreate to register RenderExport')
-    pos = on_create.end()
-    text = text[:pos] + '\n        registerPlugin(RenderExportPlugin.class);' + text[pos:]
+    if on_create:
+        pos = on_create.end()
+        text = text[:pos] + '\n        registerPlugin(RenderExportPlugin.class);' + text[pos:]
+    else:
+        activity_class = re.search(r'(public\s+class\s+MainActivity\s+extends\s+BridgeActivity\s*\{)', text)
+        if not activity_class:
+            raise SystemExit('Could not find MainActivity class to register RenderExport')
+        pos = activity_class.end()
+        method = '\n    @Override\n    public void onCreate(Bundle savedInstanceState) {\n        registerPlugin(RenderExportPlugin.class);\n        super.onCreate(savedInstanceState);\n    }\n'
+        text = text[:pos] + method + text[pos:]
 main.write_text(text)
 print(f'Added native SAF RenderExport plugin and registered it in {main}')
