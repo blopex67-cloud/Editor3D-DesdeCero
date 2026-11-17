@@ -23,3 +23,6 @@ cd android
 ```
 
 El workflow de GitHub compila el APK y lo adjunta a la ejecución como artefacto. El repositorio usa un workflow manual, sin builds automáticos por cada cambio.
+
+## Iconos
+Los iconos SVG en `public/icons/` proceden de [Lucide](https://lucide.dev/) v0.468.0 y se distribuyen bajo licencia ISC. Se empaquetan localmente para que también aparezcan sin conexión en Android.
