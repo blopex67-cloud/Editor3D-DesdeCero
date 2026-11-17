@@ -242,7 +242,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
 $('#addCube').addEventListener('click', () => addObject('Cubo'));
 $('#addSphere').addEventListener('click', () => addObject('Esfera'));
 $('#delete').addEventListener('click', removeSelected);
-$('#addMenu').addEventListener('click', () => addObject('Cubo'));
+$('#addMenu')?.addEventListener('click', () => addObject('Cubo'));
 $('#save').addEventListener('click', saveScene);
 $('#exportScene').addEventListener('click', exportGlb);
 $('#importScene').addEventListener('click', () => fileInput.click());
