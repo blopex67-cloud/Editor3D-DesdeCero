@@ -50,19 +50,26 @@ jobs:
           npx cap sync android
           python3 - <<'PY'
           from pathlib import Path
-          import xml.etree.ElementTree as ET
+          import re
           path = Path('android/app/src/main/AndroidManifest.xml')
-          tree = ET.parse(path)
-          root = tree.getroot()
-          ns = '{http://schemas.android.com/apk/res/android}'
-          activity = next((e for e in root.findall('application/activity') if e.attrib.get(ns+'name','').endswith('MainActivity')), None)
-          if activity is None:
+          text = path.read_text()
+          pattern = re.compile(r'<activity\b(?=[^>]*android:name="[^"]*MainActivity")[^>]*>', re.S)
+          match = pattern.search(text)
+          if not match:
               raise SystemExit('MainActivity not found in generated Android manifest')
-          activity.set(ns+'screenOrientation', 'landscape')
-          activity.set(ns+'configChanges', 'orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode')
-          tree.write(path, encoding='utf-8', xml_declaration=True)
-          checked = ET.parse(path).getroot().find('application/activity')
-          assert checked is not None and checked.attrib.get(ns+'screenOrientation') == 'landscape'
+          tag = match.group(0)
+          if re.search(r'android:screenOrientation="[^"]*"', tag):
+              tag = re.sub(r'android:screenOrientation="[^"]*"', 'android:screenOrientation="landscape"', tag)
+          else:
+              tag = tag[:-1] + ' android:screenOrientation="landscape">'
+          if re.search(r'android:configChanges="[^"]*"', tag):
+              tag = re.sub(r'android:configChanges="[^"]*"', 'android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"', tag)
+          else:
+              tag = tag[:-1] + ' android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode">'
+          text = text[:match.start()] + tag + text[match.end():]
+          path.write_text(text)
+          if 'android:screenOrientation="landscape"' not in tag:
+              raise SystemExit('Could not verify landscape orientation')
           print('Verified MainActivity orientation: landscape')
           PY
           cd android
