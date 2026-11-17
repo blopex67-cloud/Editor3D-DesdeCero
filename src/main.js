@@ -1,7 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import '../style.css';
 
 const $ = (selector) => document.querySelector(selector);
@@ -16,6 +22,13 @@ let selected = null;
 let serial = 0;
 let activeTool = 'select';
 let gridVisible = true;
+let animationMode = false;
+let currentFrame = 0;
+let isPlaying = false;
+let playTimer = null;
+let currentModel = null;
+let boneTarget = null;
+const keyframes = new Map();
 const objects = [];
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -39,6 +52,8 @@ try {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.08;
   renderer.setClearColor('#343537', 1);
   container.append(renderer.domElement);
   orbit = new OrbitControls(camera, renderer.domElement);
@@ -47,6 +62,11 @@ try {
   orbit.target.set(0, 0.6, 0);
   orbit.minDistance = 1.6;
   orbit.maxDistance = 40;
+  const gizmo = new TransformControls(camera, renderer.domElement);
+  scene.add(gizmo.getHelper());
+  gizmo.addEventListener('dragging-changed', (event) => { orbit.enabled = !event.value; });
+  gizmo.addEventListener('objectChange', () => { renderProperties(); });
+  window.editorGizmo = gizmo;
 } catch (error) {
   console.error('Editor 3D startup error:', error);
   showFatal(error?.message || String(error));
@@ -66,6 +86,19 @@ ground.rotation.x = -Math.PI / 2;
 ground.position.y = -0.025;
 ground.receiveShadow = true;
 scene.add(ground);
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.24, 0.35, 0.88);
+composer.addPass(bloomPass);
+const lightPostPass = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, time: { value: 0 }, grain: { value: 0.018 }, vignette: { value: 0.18 } },
+  vertexShader: `varying vec2 vUv; void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+  fragmentShader: `uniform sampler2D tDiffuse;uniform float time;uniform float grain;uniform float vignette;varying vec2 vUv;float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7))+time*17.0)*43758.5453);}void main(){vec4 c=texture2D(tDiffuse,vUv);float n=(hash(gl_FragCoord.xy)-0.5)*grain;float v=1.0-vignette*smoothstep(0.28,0.78,distance(vUv,vec2(0.5)));c.rgb=c.rgb*v+n;gl_FragColor=c;}`
+});
+composer.addPass(lightPostPass);
+composer.addPass(new OutputPass());
+let postEnabled = false;
 
 function toast(message) {
   const element = $('#toast');
@@ -97,8 +130,19 @@ function safeName(value) {
 }
 function select(object) {
   selected = object;
+  if (window.editorGizmo) {
+    const target = animationMode && boneTarget ? boneTarget : object;
+    if (target && activeTool !== 'select') {
+      window.editorGizmo.attach(target);
+      window.editorGizmo.setMode(activeTool);
+    } else if (target && animationMode) {
+      window.editorGizmo.attach(target);
+      window.editorGizmo.setMode('translate');
+    } else window.editorGizmo.detach();
+  }
   refreshList();
   renderProperties();
+  refreshBoneList();
 }
 function addObject(kind = 'Cubo', position = [0, 0.65, 0], color = null) {
   const geometry = kind === 'Esfera'
@@ -207,7 +251,7 @@ function importFile(file) {
     model.name = safeName(file.name.replace(/\.(glb|gltf)$/i, ''));
     model.userData.kind = 'Modelo';
     model.traverse((child) => { if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; } });
-    scene.add(model); objects.push(model); select(model); updateStatus(); toast('Modelo importado'); URL.revokeObjectURL(url);
+    scene.add(model); objects.push(model); currentModel = model; boneTarget = null; select(model); refreshBoneList(); updateStatus(); toast(allBones().length ? `Modelo importado · ${allBones().length} huesos` : 'Modelo importado · sin armature'); URL.revokeObjectURL(url);
   }, undefined, () => { URL.revokeObjectURL(url); toast('No se pudo importar el modelo'); });
 }
 function exportGlb() {
@@ -219,10 +263,125 @@ function exportGlb() {
     toast('Exportación lista');
   }, (error) => { console.error(error); toast('No se pudo exportar'); }, { binary: true });
 }
+function allBones() {
+  const found = [];
+  currentModel?.traverse((node) => { if (node.isBone) found.push(node); });
+  return found;
+}
+function refreshBoneList() {
+  const panel = $('#boneList');
+  if (!panel) return;
+  panel.replaceChildren();
+  const bones = allBones();
+  if (!currentModel || bones.length === 0) {
+    panel.textContent = 'Importa un GLB riggeado para editar huesos';
+    return;
+  }
+  for (const bone of bones) {
+    const row = document.createElement('div');
+    row.className = `bone-row${bone === boneTarget ? ' selected' : ''}`;
+    const pick = document.createElement('button');
+    pick.textContent = `🦴 ${bone.name || 'Hueso'}`;
+    pick.addEventListener('click', () => {
+      boneTarget = bone;
+      window.editorGizmo?.attach(bone);
+      window.editorGizmo?.setMode('rotate');
+      refreshBoneList();
+      toast(`Hueso: ${bone.name || 'Hueso'}`);
+    });
+    row.append(pick);
+    panel.append(row);
+  }
+}
+function toggleAnimationMode() {
+  animationMode = !animationMode;
+  document.body.classList.toggle('animating', animationMode);
+  $('#animationPanel').hidden = !animationMode;
+  $('#animMode').innerHTML = animationMode ? 'Pose Mode <span>⌄</span>' : 'Object Mode <span>⌄</span>';
+  if (animationMode) {
+    if (currentModel) refreshBoneList();
+    hint.textContent = 'Modo animación · selecciona un hueso y agrega keyframes';
+    if (boneTarget) { window.editorGizmo?.attach(boneTarget); window.editorGizmo?.setMode('rotate'); }
+  } else {
+    boneTarget = null;
+    if (selected && activeTool !== 'select') { window.editorGizmo?.attach(selected); window.editorGizmo?.setMode(activeTool); }
+    else window.editorGizmo?.detach();
+    hint.textContent = 'Arrastra para orbitar · pellizca para acercar';
+  }
+}
+function readTransform(node) {
+  return { position: node.position.toArray(), quaternion: node.quaternion.toArray(), scale: node.scale.toArray() };
+}
+function writeTransform(node, state) {
+  if (!node || !state) return;
+  node.position.fromArray(state.position);
+  node.quaternion.fromArray(state.quaternion);
+  node.scale.fromArray(state.scale);
+}
+function captureKeyframe() {
+  const frame = Math.max(0, Math.min(120, Number($('#frameNumber').value) || currentFrame));
+  currentFrame = frame;
+  const pose = new Map();
+  for (const object of objects) pose.set(object.uuid, readTransform(object));
+  for (const bone of allBones()) pose.set(bone.uuid, readTransform(bone));
+  keyframes.set(frame, pose);
+  updateFrameControls();
+  toast(`Keyframe guardado · ${frame}`);
+}
+function poseAt(frame, pose) {
+  for (const object of objects) if (pose.has(object.uuid)) writeTransform(object, pose.get(object.uuid));
+  for (const bone of allBones()) if (pose.has(bone.uuid)) writeTransform(bone, pose.get(bone.uuid));
+}
+function updateFrameControls() {
+  $('#frameRange').value = String(currentFrame);
+  $('#frameNumber').value = String(currentFrame);
+  const panel = $('#animationPanel');
+  panel?.querySelectorAll('.frame-tick').forEach((node) => node.remove());
+  for (const frame of keyframes.keys()) {
+    const tick = document.createElement('span');
+    tick.className = 'frame-tick';
+    tick.textContent = '◆';
+    tick.title = `Keyframe ${frame}`;
+    tick.style.left = `${(frame / 120) * 100}%`;
+    $('#frameRange').parentElement.append(tick);
+  }
+}
+function setFrame(frame) {
+  currentFrame = Math.max(0, Math.min(120, Number(frame) || 0));
+  const saved = keyframes.get(currentFrame);
+  if (saved) poseAt(currentFrame, saved);
+  updateFrameControls();
+}
+function togglePlayback() {
+  isPlaying = !isPlaying;
+  $('#playAnimation').textContent = isPlaying ? '❚❚' : '▶';
+  clearInterval(playTimer);
+  if (isPlaying) playTimer = setInterval(() => {
+    currentFrame = currentFrame >= 120 ? 0 : currentFrame + 1;
+    const frames = [...keyframes.keys()].sort((a, b) => a - b);
+    if (frames.length) {
+      let before = frames.filter((f) => f <= currentFrame).at(-1);
+      let after = frames.find((f) => f >= currentFrame);
+      if (before === undefined) before = frames[0];
+      if (after === undefined) after = frames.at(-1);
+      const a = keyframes.get(before), b = keyframes.get(after);
+      const t = before === after ? 0 : (currentFrame - before) / (after - before);
+      for (const node of [...objects, ...allBones()]) {
+        const start = a.get(node.uuid), end = b.get(node.uuid);
+        if (!start || !end) continue;
+        node.position.fromArray(start.position).lerp(new THREE.Vector3(...end.position), t);
+        node.scale.fromArray(start.scale).lerp(new THREE.Vector3(...end.scale), t);
+        node.quaternion.fromArray(start.quaternion).slerp(new THREE.Quaternion(...end.quaternion), t);
+      }
+    }
+    updateFrameControls();
+  }, 40);
+}
 function resize() {
   const rect = container.getBoundingClientRect();
   if (!renderer || rect.width < 2 || rect.height < 2) return;
   renderer.setSize(rect.width, rect.height, false);
+  composer.setSize(rect.width, rect.height);
   camera.aspect = rect.width / rect.height;
   camera.updateProjectionMatrix();
 }
@@ -250,10 +409,48 @@ fileInput.addEventListener('change', () => { importFile(fileInput.files?.[0]); f
 $('#gridToggle').addEventListener('click', () => { gridVisible = !gridVisible; grid.visible = gridVisible; });
 $('#frame').addEventListener('click', () => { orbit.target.set(0, 0.6, 0); camera.position.set(5, 4, 7); orbit.update(); });
 $('#undo').addEventListener('click', () => toast('Deshacer todavía no está disponible'));
-document.querySelectorAll('[data-tool]').forEach((button) => button.addEventListener('click', () => setTool(button.dataset.tool)));
+$('#animMode').addEventListener('click', toggleAnimationMode);
+$('#addKeyframe').addEventListener('click', captureKeyframe);
+$('#playAnimation').addEventListener('click', togglePlayback);
+$('#frameRange').addEventListener('input', (event) => setFrame(event.target.value));
+$('#frameNumber').addEventListener('change', (event) => setFrame(event.target.value));
+$('#prevFrame').addEventListener('click', () => setFrame(currentFrame - 1));
+$('#nextFrame').addEventListener('click', () => setFrame(currentFrame + 1));
+$('#addBoneTrack').addEventListener('click', () => {
+  const bones = allBones();
+  if (!bones.length) { toast('Importa primero un GLB con esqueleto'); return; }
+  if (!boneTarget) boneTarget = bones[0];
+  window.editorGizmo?.attach(boneTarget);
+  window.editorGizmo?.setMode('rotate');
+  refreshBoneList();
+  toast(`Pista de hueso: ${boneTarget.name || 'Hueso'}`);
+});
+$('#postToggle').addEventListener('click', (event) => {
+  postEnabled = !postEnabled;
+  event.currentTarget.classList.toggle('active', postEnabled);
+  bloomPass.enabled = postEnabled;
+  lightPostPass.enabled = postEnabled;
+  toast(postEnabled ? 'Postprocesado liviano activado' : 'Postprocesado desactivado');
+});
+document.querySelectorAll('[data-tool]').forEach((button) => button.addEventListener('click', () => {
+  setTool(button.dataset.tool);
+  if (animationMode && boneTarget) {
+    window.editorGizmo?.attach(boneTarget);
+    window.editorGizmo?.setMode(button.dataset.tool === 'select' ? 'rotate' : button.dataset.tool);
+  } else if (selected && button.dataset.tool !== 'select') {
+    window.editorGizmo?.attach(selected);
+    window.editorGizmo?.setMode(button.dataset.tool);
+  } else window.editorGizmo?.detach();
+}));
 
 // Initial layout is sized before the first render, then create a visible object as a startup smoke signal.
 resize();
 addObject('Cubo');
-function frame() { requestAnimationFrame(frame); orbit.update(); renderer.render(scene, camera); }
+function frame() {
+  requestAnimationFrame(frame);
+  orbit.update();
+  lightPostPass.uniforms.time.value += 0.016;
+  if (postEnabled) composer.render();
+  else renderer.render(scene, camera);
+}
 frame();
