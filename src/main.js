@@ -1,43 +1,259 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import '../style.css';
 
-const container=document.querySelector('#scene');
-const scene=new THREE.Scene(); scene.background=new THREE.Color('#2b2c2f');
-const camera=new THREE.PerspectiveCamera(48,1,.05,1000);camera.position.set(5,4.3,7);
-const renderer=new THREE.WebGLRenderer({antialias:true,alpha:false,powerPreference:'high-performance'});
-renderer.setPixelRatio(Math.min(devicePixelRatio,1.7));renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.1;container.appendChild(renderer.domElement);
-const orbit=new OrbitControls(camera,renderer.domElement);orbit.enableDamping=true;orbit.dampingFactor=.08;orbit.target.set(0,.6,0);orbit.minDistance=1.5;orbit.maxDistance=40;
-const transform=new TransformControls(camera,renderer.domElement);scene.add(transform.getHelper());transform.addEventListener('dragging-changed',e=>orbit.enabled=!e.value);transform.addEventListener('objectChange',()=>renderProperties());
-scene.add(new THREE.HemisphereLight(0xdce9ff,0x48434a,2.0));const sun=new THREE.DirectionalLight(0xffffff,3);sun.position.set(5,9,6);sun.castShadow=true;scene.add(sun);
-const grid=new THREE.GridHelper(24,48,0x8a8e95,0x55585e);grid.position.y=-.012;scene.add(grid);
-const ground=new THREE.Mesh(new THREE.PlaneGeometry(200,200),new THREE.MeshStandardMaterial({color:0x2b2c2f,roughness:1}));ground.rotation.x=-Math.PI/2;ground.position.y=-.025;ground.receiveShadow=true;scene.add(ground);
-const objects=[];let selected=null,counter=0,currentTool='select',gridVisible=true;
-const list=document.querySelector('#objectList'),properties=document.querySelector('#properties'),fileInput=document.querySelector('#fileInput');
-const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2();
-function resize(){const r=container.getBoundingClientRect();if(!r.width||!r.height)return;renderer.setSize(r.width,r.height,false);camera.aspect=r.width/r.height;camera.updateProjectionMatrix()}
-new ResizeObserver(resize).observe(container);window.addEventListener('orientationchange',()=>setTimeout(resize,120));resize();
-function markChange(){document.querySelector('#status').textContent=`${objects.length} objeto${objects.length===1?'':'s'}`}
-function safeName(value){return String(value||'Objeto').replace(/[<>&"']/g,'').slice(0,50)}
-function addPrimitive(kind='Cubo',position=[0,.65,0],color){const geometry=kind==='Esfera'?new THREE.SphereGeometry(.65,32,24):new THREE.BoxGeometry(1.2,1.2,1.2);const material=new THREE.MeshStandardMaterial({color:color|| (kind==='Esfera'?0x59bcff:0xe3e4e6),roughness:.5,metalness:.04});const mesh=new THREE.Mesh(geometry,material);mesh.name=`${kind} ${++counter}`;mesh.position.fromArray(position);mesh.castShadow=true;mesh.receiveShadow=true;mesh.userData.primitive=kind;scene.add(mesh);objects.push(mesh);select(mesh);refreshList();markChange();return mesh}
-function select(obj){selected=obj;if(obj){transform.attach(obj);document.querySelectorAll('.object-row').forEach(row=>row.classList.toggle('selected',row.dataset.key===obj.uuid))}else transform.detach();renderProperties();refreshList()}
-function refreshList(){list.replaceChildren();for(const obj of objects){const row=document.createElement('button');row.className='object-row'+(obj===selected?' selected':'');row.dataset.key=obj.uuid;const icon=document.createElement('span');icon.textContent=obj.userData.primitive==='Esfera'?'◉':obj.userData.primitive==='model'?'◈':'⬡';const name=document.createElement('span');name.textContent=obj.name;row.append(icon,name);row.onclick=()=>select(obj);list.append(row)}}
-function field(label,key,value,step='.1'){return `<label class="value-row"><span>${label}</span><input data-${key} type="number" step="${step}" value="${Number(value).toFixed(2)}"></label>`}
-function renderProperties(){if(!selected){properties.textContent='Selecciona un objeto';return}const p=selected.position,r=selected.rotation,s=selected.scale;properties.innerHTML=`<label class="prop-label">Nombre<input id="objectName" type="text" maxlength="50"></label><label class="prop-label">Color<input id="objectColor" type="color"></label><div class="section-label">POSICIÓN</div>${field('X','pos',p.x)}${field('Y','pos',p.y)}${field('Z','pos',p.z)}<div class="section-label">ROTACIÓN (°)</div>${field('X','rot',THREE.MathUtils.radToDeg(r.x),'1')}${field('Y','rot',THREE.MathUtils.radToDeg(r.y),'1')}${field('Z','rot',THREE.MathUtils.radToDeg(r.z),'1')}<div class="section-label">ESCALA</div>${field('X','scale',s.x)}${field('Y','scale',s.y)}${field('Z','scale',s.z)}`;document.querySelector('#objectName').value=selected.name;document.querySelector('#objectColor').value='#'+(selected.material?.color?.getHexString?.()||'ffffff');document.querySelector('#objectName').onchange=e=>{selected.name=safeName(e.target.value)||'Objeto';refreshList()};document.querySelector('#objectColor').oninput=e=>{if(selected.material?.color)selected.material.color.set(e.target.value)};document.querySelectorAll('[data-pos]').forEach((el,i)=>el.onchange=()=>{selected.position.setComponent(i,Number(el.value)||0)});document.querySelectorAll('[data-rot]').forEach((el,i)=>el.onchange=()=>{selected.rotation.setComponent(i,THREE.MathUtils.degToRad(Number(el.value)||0))});document.querySelectorAll('[data-scale]').forEach((el,i)=>el.onchange=()=>{selected.scale.setComponent(i,Math.max(.01,Number(el.value)||.01))})}
-function setTool(tool){currentTool=tool;document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('active',b.dataset.tool===tool));if(tool==='select'){transform.detach();orbit.enabled=true}else if(selected){transform.attach(selected);transform.setMode(tool);orbit.enabled=true}document.querySelector('#hint').textContent=tool==='select'?'Arrastra para orbitar · pellizca para acercar':tool==='translate'?'Usa los ejes para mover el objeto':tool==='rotate'?'Usa los anillos para rotar':'Usa los ejes para cambiar escala'}
-function removeSelected(){if(!selected)return;scene.remove(selected);objects.splice(objects.indexOf(selected),1);selected=null;transform.detach();refreshList();renderProperties();markChange()}
-function serialize(){return {format:'editor-3d-scene',version:1,objects:objects.filter(o=>o.userData.primitive!=='model').map(o=>({name:o.name,kind:o.userData.primitive||'Cubo',position:o.position.toArray(),rotation:o.rotation.toArray(),scale:o.scale.toArray(),color:o.material?.color?`#${o.material.color.getHexString()}`:'#ffffff'}))}}
-function download(name,data,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1500)}
-function saveScene(){download('mi-escena-3d.json',JSON.stringify(serialize(),null,2),'application/json');toast('Escena guardada')}
-function loadScene(data){if(data?.format!=='editor-3d-scene'||!Array.isArray(data.objects))throw Error('El archivo no parece una escena de este editor');for(const o of [...objects]){scene.remove(o);objects.splice(objects.indexOf(o),1)}selected=null;for(const item of data.objects.slice(0,500)){const obj=addPrimitive(item.kind==='Esfera'?'Esfera':'Cubo',Array.isArray(item.position)?item.position:[0,.65,0],item.color);obj.name=safeName(item.name)||obj.name;obj.rotation.fromArray(Array.isArray(item.rotation)?item.rotation:[0,0,0]);obj.scale.fromArray(Array.isArray(item.scale)?item.scale:[1,1,1])}refreshList();renderProperties();markChange();toast('Escena importada')}
-function importFile(file){if(!file)return;if(file.name.toLowerCase().endsWith('.json')){file.text().then(text=>loadScene(JSON.parse(text))).catch(()=>toast('No se pudo leer la escena'));return}new GLTFLoader().load(URL.createObjectURL(file),gltf=>{const group=gltf.scene;group.name=safeName(file.name.replace(/\.(glb|gltf)$/i,''))||'Modelo';group.userData.primitive='model';group.traverse(n=>{if(n.isMesh){n.castShadow=true;n.receiveShadow=true}});scene.add(group);objects.push(group);select(group);markChange();toast('Modelo 3D importado')},undefined,()=>toast('No se pudo importar ese modelo'))}
-function exportGLB(){const root=new THREE.Group();for(const o of objects)root.add(o.clone());new GLTFExporter().parse(root,result=>{if(result instanceof ArrayBuffer)download('escena-3d.glb',result,'model/gltf-binary');else download('escena-3d.gltf',JSON.stringify(result),'model/gltf+json');toast('Exportación lista')},error=>{console.error(error);toast('No se pudo exportar')},{binary:true,onlyVisible:true})}
-function toast(text){const el=document.querySelector('#toast');el.textContent=text;el.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>el.classList.remove('show'),1900)}
-renderer.domElement.addEventListener('pointerdown',e=>{if(e.target.closest('.gizmo'))return;const r=renderer.domElement.getBoundingClientRect();pointer.set(((e.clientX-r.left)/r.width)*2-1,-((e.clientY-r.top)/r.height)*2+1);raycaster.setFromCamera(pointer,camera);const hits=raycaster.intersectObjects(objects,true);if(hits.length){let obj=hits[0].object;while(obj.parent&&!objects.includes(obj))obj=obj.parent;select(objects.includes(obj)?obj:null)}else if(currentTool==='select')select(null)});
-document.querySelectorAll('[data-tool]').forEach(b=>b.onclick=()=>setTool(b.dataset.tool));document.querySelector('#addCube').onclick=()=>addPrimitive('Cubo');document.querySelector('#addSphere').onclick=()=>addPrimitive('Esfera');document.querySelector('#delete').onclick=removeSelected;document.querySelector('#addMenu').onclick=()=>addPrimitive('Cubo');document.querySelector('#save').onclick=saveScene;document.querySelector('#exportScene').onclick=exportGLB;document.querySelector('#importScene').onclick=()=>fileInput.click();fileInput.onchange=()=>{importFile(fileInput.files?.[0]);fileInput.value=''};
-document.querySelector('#gridToggle').onclick=()=>{gridVisible=!gridVisible;grid.visible=gridVisible};document.querySelector('#frame').onclick=()=>{orbit.target.set(0,.6,0);camera.position.set(5,4.3,7);orbit.update()};document.querySelector('#undo').onclick=()=>toast('Deshacer disponible en próximas mejoras');
-function animate(){requestAnimationFrame(animate);orbit.update();renderer.render(scene,camera)}
-addPrimitive('Cubo');animate();
+const $ = (selector) => document.querySelector(selector);
+const container = $('#scene');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#343537');
+const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 500);
+camera.position.set(5, 4, 7);
+let renderer;
+let orbit;
+let selected = null;
+let serial = 0;
+let activeTool = 'select';
+let gridVisible = true;
+const objects = [];
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const hint = $('#hint');
+const list = $('#objectList');
+const props = $('#properties');
+const fileInput = $('#fileInput');
+
+function showFatal(message) {
+  const box = document.createElement('div');
+  box.style.cssText = 'position:absolute;inset:28px 0 0;z-index:99;display:grid;place-items:center;padding:24px;background:#343537;color:#fff;text-align:center;font:14px system-ui';
+  box.textContent = `No se pudo iniciar el visor 3D: ${message}`;
+  container?.append(box);
+}
+window.addEventListener('error', (event) => showFatal(event.message || 'error de JavaScript'));
+window.addEventListener('unhandledrejection', (event) => showFatal(event.reason?.message || 'error al cargar un módulo'));
+
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.6));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.setClearColor('#343537', 1);
+  container.append(renderer.domElement);
+  orbit = new OrbitControls(camera, renderer.domElement);
+  orbit.enableDamping = true;
+  orbit.dampingFactor = 0.09;
+  orbit.target.set(0, 0.6, 0);
+  orbit.minDistance = 1.6;
+  orbit.maxDistance = 40;
+} catch (error) {
+  console.error('Editor 3D startup error:', error);
+  showFatal(error?.message || String(error));
+  throw error;
+}
+
+scene.add(new THREE.HemisphereLight(0xdce9ff, 0x48434a, 2));
+const sun = new THREE.DirectionalLight(0xffffff, 2.6);
+sun.position.set(5, 9, 6);
+sun.castShadow = true;
+scene.add(sun);
+const grid = new THREE.GridHelper(20, 40, 0x96999d, 0x606266);
+grid.position.y = -0.01;
+scene.add(grid);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: '#343537', roughness: 1 }));
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.025;
+ground.receiveShadow = true;
+scene.add(ground);
+
+function toast(message) {
+  const element = $('#toast');
+  element.textContent = message;
+  element.classList.add('show');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => element.classList.remove('show'), 2200);
+}
+function updateStatus() {
+  $('#status').textContent = `${objects.length} objeto${objects.length === 1 ? '' : 's'}`;
+}
+function refreshList() {
+  list.replaceChildren();
+  for (const object of objects) {
+    const row = document.createElement('button');
+    row.className = `object-row${object === selected ? ' selected' : ''}`;
+    row.dataset.key = object.uuid;
+    const icon = document.createElement('span');
+    icon.textContent = object.userData.kind === 'Esfera' ? '◉' : object.userData.kind === 'Modelo' ? '◈' : '⬡';
+    const name = document.createElement('span');
+    name.textContent = object.name;
+    row.append(icon, name);
+    row.addEventListener('click', () => select(object));
+    list.append(row);
+  }
+}
+function safeName(value) {
+  return String(value || 'Objeto').replace(/[<>&"']/g, '').slice(0, 50) || 'Objeto';
+}
+function select(object) {
+  selected = object;
+  refreshList();
+  renderProperties();
+}
+function addObject(kind = 'Cubo', position = [0, 0.65, 0], color = null) {
+  const geometry = kind === 'Esfera'
+    ? new THREE.SphereGeometry(0.62, 32, 24)
+    : new THREE.BoxGeometry(1.15, 1.15, 1.15);
+  const material = new THREE.MeshStandardMaterial({
+    color: color || (kind === 'Esfera' ? '#66c8ff' : '#e5e5e5'),
+    roughness: 0.55,
+    metalness: 0.03
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = `${kind} ${++serial}`;
+  mesh.position.fromArray(position);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.userData.kind = kind;
+  scene.add(mesh);
+  objects.push(mesh);
+  select(mesh);
+  updateStatus();
+  return mesh;
+}
+function field(label, axis, value, kind) {
+  return `<label class="value-row"><span>${label}</span><input type="number" step="0.1" data-axis="${axis}" data-kind="${kind}" value="${Number(value).toFixed(2)}"></label>`;
+}
+function renderProperties() {
+  if (!selected) {
+    props.textContent = 'Selecciona un objeto';
+    return;
+  }
+  const p = selected.position;
+  const r = selected.rotation;
+  const s = selected.scale;
+  props.innerHTML = `<label class="prop-label">Nombre<input id="objectName" type="text" maxlength="50"></label>
+    <label class="prop-label">Color<input id="objectColor" type="color"></label>
+    <div class="section-label">POSICIÓN</div>${field('X', 0, p.x, 'position')}${field('Y', 1, p.y, 'position')}${field('Z', 2, p.z, 'position')}
+    <div class="section-label">ROTACIÓN</div>${field('X', 0, THREE.MathUtils.radToDeg(r.x), 'rotation')}${field('Y', 1, THREE.MathUtils.radToDeg(r.y), 'rotation')}${field('Z', 2, THREE.MathUtils.radToDeg(r.z), 'rotation')}
+    <div class="section-label">ESCALA</div>${field('X', 0, s.x, 'scale')}${field('Y', 1, s.y, 'scale')}${field('Z', 2, s.z, 'scale')}`;
+  const nameInput = $('#objectName');
+  nameInput.value = selected.name;
+  nameInput.addEventListener('change', () => { selected.name = safeName(nameInput.value); refreshList(); });
+  const colorInput = $('#objectColor');
+  colorInput.value = `#${selected.material?.color?.getHexString?.() || 'ffffff'}`;
+  colorInput.addEventListener('input', () => selected.material?.color?.set(colorInput.value));
+  props.querySelectorAll('[data-axis]').forEach((input) => input.addEventListener('change', () => {
+    const axis = Number(input.dataset.axis);
+    const value = Number(input.value) || 0;
+    if (input.dataset.kind === 'position') selected.position.setComponent(axis, value);
+    if (input.dataset.kind === 'rotation') selected.rotation.setComponent(axis, THREE.MathUtils.degToRad(value));
+    if (input.dataset.kind === 'scale') selected.scale.setComponent(axis, Math.max(0.01, value));
+  }));
+}
+function setTool(tool) {
+  activeTool = tool;
+  document.querySelectorAll('[data-tool]').forEach((button) => button.classList.toggle('active', button.dataset.tool === tool));
+  const messages = { select: 'Toca un objeto para seleccionarlo · arrastra para orbitar', translate: 'Selecciona y arrastra el objeto para moverlo', rotate: 'Selecciona y arrastra para rotar el objeto', scale: 'Selecciona y arrastra para cambiar su escala' };
+  hint.textContent = messages[tool] || messages.select;
+}
+function removeSelected() {
+  if (!selected) return;
+  scene.remove(selected);
+  objects.splice(objects.indexOf(selected), 1);
+  selected = null;
+  refreshList();
+  renderProperties();
+  updateStatus();
+}
+function snapshot() {
+  return { format: 'editor-3d-scene', version: 1, objects: objects.map((object) => ({
+    name: object.name, kind: object.userData.kind || 'Cubo', position: object.position.toArray(),
+    rotation: object.rotation.toArray(), scale: object.scale.toArray(),
+    color: `#${object.material?.color?.getHexString?.() || 'ffffff'}`
+  })) };
+}
+function download(name, data, type) {
+  const url = URL.createObjectURL(new Blob([data], { type }));
+  const anchor = document.createElement('a');
+  anchor.href = url; anchor.download = name; anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+function saveScene() {
+  download('mi-escena-3d.json', JSON.stringify(snapshot(), null, 2), 'application/json');
+  toast('Escena guardada');
+}
+function loadScene(data) {
+  if (data?.format !== 'editor-3d-scene' || !Array.isArray(data.objects)) throw new Error('Archivo de escena no válido');
+  for (const object of [...objects]) scene.remove(object);
+  objects.length = 0; selected = null;
+  for (const item of data.objects.slice(0, 300)) {
+    const object = addObject(item.kind === 'Esfera' ? 'Esfera' : 'Cubo', Array.isArray(item.position) ? item.position : [0, 0.65, 0], item.color);
+    object.name = safeName(item.name);
+    object.rotation.fromArray(Array.isArray(item.rotation) ? item.rotation : [0, 0, 0]);
+    object.scale.fromArray(Array.isArray(item.scale) ? item.scale : [1, 1, 1]);
+  }
+  refreshList(); renderProperties(); updateStatus(); toast('Escena importada');
+}
+function importFile(file) {
+  if (!file) return;
+  if (file.name.toLowerCase().endsWith('.json')) {
+    file.text().then((text) => loadScene(JSON.parse(text))).catch((error) => toast(error.message || 'No se pudo abrir la escena'));
+    return;
+  }
+  const url = URL.createObjectURL(file);
+  new GLTFLoader().load(url, (gltf) => {
+    const model = gltf.scene;
+    model.name = safeName(file.name.replace(/\.(glb|gltf)$/i, ''));
+    model.userData.kind = 'Modelo';
+    model.traverse((child) => { if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; } });
+    scene.add(model); objects.push(model); select(model); updateStatus(); toast('Modelo importado'); URL.revokeObjectURL(url);
+  }, undefined, () => { URL.revokeObjectURL(url); toast('No se pudo importar el modelo'); });
+}
+function exportGlb() {
+  const root = new THREE.Group();
+  for (const object of objects) root.add(object.clone());
+  new GLTFExporter().parse(root, (result) => {
+    if (result instanceof ArrayBuffer) download('escena-3d.glb', result, 'model/gltf-binary');
+    else download('escena-3d.gltf', JSON.stringify(result), 'model/gltf+json');
+    toast('Exportación lista');
+  }, (error) => { console.error(error); toast('No se pudo exportar'); }, { binary: true });
+}
+function resize() {
+  const rect = container.getBoundingClientRect();
+  if (!renderer || rect.width < 2 || rect.height < 2) return;
+  renderer.setSize(rect.width, rect.height, false);
+  camera.aspect = rect.width / rect.height;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(container);
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 250));
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  if (activeTool !== 'select') return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(objects, true);
+  let target = hits[0]?.object || null;
+  while (target && !objects.includes(target)) target = target.parent;
+  select(target);
+});
+$('#addCube').addEventListener('click', () => addObject('Cubo'));
+$('#addSphere').addEventListener('click', () => addObject('Esfera'));
+$('#delete').addEventListener('click', removeSelected);
+$('#addMenu').addEventListener('click', () => addObject('Cubo'));
+$('#save').addEventListener('click', saveScene);
+$('#exportScene').addEventListener('click', exportGlb);
+$('#importScene').addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => { importFile(fileInput.files?.[0]); fileInput.value = ''; });
+$('#gridToggle').addEventListener('click', () => { gridVisible = !gridVisible; grid.visible = gridVisible; });
+$('#frame').addEventListener('click', () => { orbit.target.set(0, 0.6, 0); camera.position.set(5, 4, 7); orbit.update(); });
+$('#undo').addEventListener('click', () => toast('Deshacer todavía no está disponible'));
+document.querySelectorAll('[data-tool]').forEach((button) => button.addEventListener('click', () => setTool(button.dataset.tool)));
+
+// Initial layout is sized before the first render, then create a visible object as a startup smoke signal.
+resize();
+addObject('Cubo');
+function frame() { requestAnimationFrame(frame); orbit.update(); renderer.render(scene, camera); }
+frame();
