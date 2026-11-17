@@ -25,14 +25,14 @@
     </header>
     <main class="workspace">
       <nav class="toolbar" aria-label="Herramientas">
-        <button class="tool active" data-tool="select" title="Seleccionar"><span>✥</span><small>Selección</small></button>
-        <button class="tool" data-tool="translate" title="Mover"><span>✣</span><small>Mover</small></button>
-        <button class="tool" data-tool="rotate" title="Rotar"><span>⟳</span><small>Rotar</small></button>
-        <button class="tool" data-tool="scale" title="Escalar"><span>⤢</span><small>Escala</small></button>
+        <button class="tool active" data-tool="select" title="Seleccionar"><img src="icons/move-3d.svg" alt=""><small>Selección</small></button>
+        <button class="tool" data-tool="translate" title="Mover"><img src="icons/move-3d.svg" alt=""><small>Mover</small></button>
+        <button class="tool" data-tool="rotate" title="Rotar"><img src="icons/rotate-3d.svg" alt=""><small>Rotar</small></button>
+        <button class="tool" data-tool="scale" title="Escalar"><img src="icons/scaling.svg" alt=""><small>Escala</small></button>
         <i></i>
-        <button class="tool" id="addCube" title="Añadir cubo"><span>⬡</span><small>Cubo</small></button>
-        <button class="tool" id="addSphere" title="Añadir esfera"><span>◉</span><small>Esfera</small></button>
-        <button class="tool" id="delete" title="Borrar objeto"><span>▤</span><small>Borrar</small></button>
+        <button class="tool" id="addCube" title="Añadir cubo"><img src="icons/box.svg" alt=""><small>Cubo</small></button>
+        <button class="tool" id="addSphere" title="Añadir esfera"><img src="icons/circle.svg" alt=""><small>Esfera</small></button>
+        <button class="tool" id="delete" title="Borrar objeto"><img src="icons/trash-2.svg" alt=""><small>Borrar</small></button>
       </nav>
       <section class="viewport">
         <div class="view-label"><strong>Object Mode</strong><span id="hint">Arrastra para orbitar · pellizca para acercar</span></div>
@@ -40,7 +40,7 @@
         <div class="left-overlay"><button title="Mover">✣</button><button title="Girar">⟳</button></div>
         <div class="right-overlay"><button title="Vista cámara">◉</button><button title="Vista escena">◈</button></div>
         <div class="bone-markers" id="boneMarkers"></div>
-        <aside class="assets-panel" id="assetsPanel" hidden><div class="assets-head"><b>ASSETS</b><button id="assetsClose">×</button></div><div class="asset-group"><span>ILUMINACIÓN OPTIMIZADA</span><button data-asset="point">＋ Luz puntual</button><button data-asset="directional">＋ Luz direccional</button><button data-asset="ambient">＋ Luz ambiente</button></div><div class="asset-group"><span>CÁMARAS</span><button data-asset="camera">＋ Cámara</button></div><div class="asset-group"><span>MESHES</span><button data-asset="cube">＋ Cubo</button><button data-asset="sphere">＋ Esfera</button><button data-asset="plane">＋ Plano</button></div><p>Luces eficientes: sin sombras dinámicas por defecto.</p></aside>
+        <aside class="assets-panel" id="assetsPanel" hidden><div class="assets-head"><b>ASSETS</b><button id="assetsClose">×</button></div><div class="asset-group"><span>ILUMINACIÓN OPTIMIZADA</span><button data-asset="point"><img src="icons/lightbulb.svg" alt=""> Luz puntual</button><button data-asset="directional"><img src="icons/lightbulb.svg" alt=""> Luz direccional</button><button data-asset="ambient"><img src="icons/lightbulb.svg" alt=""> Luz ambiente</button></div><div class="asset-group"><span>CÁMARAS</span><button data-asset="camera"><img src="icons/camera.svg" alt=""> Cámara</button></div><div class="asset-group"><span>MESHES</span><button data-asset="cube"><img src="icons/box.svg" alt=""> Cubo</button><button data-asset="sphere"><img src="icons/circle.svg" alt=""> Esfera</button><button data-asset="plane"><img src="icons/grid-3x3.svg" alt=""> Plano</button></div><p>Luces eficientes: sin sombras dinámicas por defecto.</p></aside>
         <div class="view-tools"><button id="frame" title="Centrar vista">⊙</button><button id="gridToggle" title="Cuadrícula">▦</button><button id="postToggle" title="Postprocesado PBR liviano">RA</button></div>
         <section class="animation-timeline" id="animationTimeline" hidden>
           <div class="timeline-title"><b>ANIMACIÓN</b><span id="timelineTrackName">Sin pista seleccionada</span><button id="addKeyframe" title="Insertar keyframe">◆ Key</button></div>
