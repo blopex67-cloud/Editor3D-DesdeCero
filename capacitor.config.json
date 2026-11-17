@@ -1,0 +1,6 @@
+{
+  "appId": "com.zapia.editor3d",
+  "appName": "Editor 3D",
+  "webDir": "dist",
+  "server": { "androidScheme": "https" }
+}

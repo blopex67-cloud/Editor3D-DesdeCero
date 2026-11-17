@@ -1,0 +1,20 @@
+{
+  "name": "editor-3d-desde-cero",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "cap:add:android": "cap add android",
+    "cap:sync": "cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/core": "^7.4.3",
+    "three": "^0.179.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.3",
+    "vite": "^6.3.5"
+  }
+}
