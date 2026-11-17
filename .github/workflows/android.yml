@@ -36,16 +36,6 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools-version: 11076708
-          packages: platform-tools
-
-      - name: Install Android platform and build tools
-        run: |
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/12.0/bin/sdkmanager"
-          yes | "$SDKMANAGER" --licenses >/dev/null
-          "$SDKMANAGER" "platforms;android-35"
-          "$SDKMANAGER" "build-tools;35.0.0"
 
       - name: Install dependencies and build web app
         run: |
@@ -56,6 +46,16 @@ jobs:
         run: |
           npx cap add android
           npx cap sync android
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('android/app/src/main/AndroidManifest.xml')
+          text = p.read_text()
+          if 'android:screenOrientation=' not in text:
+              text = text.replace('<activity ', '<activity android:screenOrientation="landscape" ', 1)
+          else:
+              text = text.replace('android:screenOrientation="unspecified"', 'android:screenOrientation="landscape"')
+          p.write_text(text)
+          PY
           cd android
           chmod +x gradlew
           ./gradlew --no-daemon assembleDebug
