@@ -79,18 +79,16 @@ try {
   orbit.maxDistance = 40;
   const gizmo = new TransformControls(camera, renderer.domElement);
   scene.add(gizmo.getHelper());
-  gizmo.setSize(0.8);
+  gizmo.setSize(0.48);
   gizmo.addEventListener('dragging-changed', (event) => { orbit.enabled = !event.value; });
   gizmo.addEventListener('change', () => updateBoneMarkers());
+  // Keep Three.js axis handles functional, with distinct high-visibility neon RGB colors.
+  gizmo.setColors('#ff1744', '#39ff14', '#00b7ff', '#fff200');
   gizmo.getHelper().traverse((node) => {
     if (!node.material) return;
     const materials = Array.isArray(node.material) ? node.material : [node.material];
     for (const material of materials) {
-      if (material.color) material.color.set('#52e5ff');
-      if ('emissive' in material) { material.emissive.set('#05bce8'); material.emissiveIntensity = 1.4; }
       material.depthTest = false;
-      material.transparent = true;
-      material.opacity = 0.98;
       material.needsUpdate = true;
     }
     node.renderOrder = 999;
@@ -361,41 +359,55 @@ function allBones() {
   return found;
 }
 function updateBoneMarkers() {
-  const layer = $('#boneMarkers');
-  if (!layer || !currentModel) return;
+  if (!currentModel) return;
   camera.updateMatrixWorld();
   currentModel.updateMatrixWorld(true);
-  const viewRect = container.getBoundingClientRect();
-  for (const [bone, dot] of boneDots) {
-    if (!animationMode) { dot.hidden = true; continue; }
-    dot.hidden = false;
-    const world = bone.getWorldPosition(new THREE.Vector3());
-    world.project(camera);
-    const x = (world.x * 0.5 + 0.5) * viewRect.width;
-    const y = (-world.y * 0.5 + 0.5) * viewRect.height;
-    const visible = world.z > -1 && world.z < 1 && x >= 0 && x <= viewRect.width && y >= 0 && y <= viewRect.height;
-    dot.style.display = visible ? 'grid' : 'none';
-    if (visible) dot.style.transform = `translate(${x - 9}px,${y - 9}px)`;
-    dot.classList.toggle('selected', bone === boneTarget);
+  const worldPosition = new THREE.Vector3();
+  const height = Math.max(1, container.clientHeight);
+  for (const [bone, marker] of boneDots) {
+    marker.visible = animationMode;
+    if (!animationMode) continue;
+    bone.getWorldPosition(worldPosition);
+    marker.position.copy(worldPosition);
+    const distance = Math.max(0.1, camera.position.distanceTo(worldPosition));
+    const radius = THREE.MathUtils.clamp(2.8 * 2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) / height, 0.006, 0.04);
+    marker.scale.setScalar(radius);
+    marker.material.color.set(bone === boneTarget ? '#fff4c2' : '#e8f3f7');
   }
 }
+function refreshGizmoEmissive() {
+  const helper = window.editorGizmo?.getHelper();
+  if (!helper) return;
+  const axisColors = { X: '#ff1744', Y: '#39ff14', Z: '#00b7ff' };
+  helper.traverse((node) => {
+    if (!node.material || !node.name) return;
+    const axis = node.name[0];
+    if (!axisColors[axis]) return;
+    const list = Array.isArray(node.material) ? node.material : [node.material];
+    for (const material of list) {
+      if (material.color) material.color.set(axisColors[axis]);
+      if (material.emissive) material.emissive.set(axisColors[axis]);
+      if ('emissiveIntensity' in material) material.emissiveIntensity = 0.6;
+      material.needsUpdate = true;
+    }
+  });
+}
 function makeBoneMarkers(model) {
-  const layer = $('#boneMarkers');
-  layer.replaceChildren();
+  for (const marker of boneDots.values()) scene.remove(marker);
   boneDots.clear();
   model.updateMatrixWorld(true);
   const bones = [];
   model.traverse((node) => { if (node.isBone) bones.push(node); });
-  bones.forEach((bone, index) => {
-    const dot = document.createElement('button');
-    dot.className = 'bone-dot';
-    dot.hidden = !animationMode;
-    dot.type = 'button';
-    dot.textContent = '•';
-    dot.title = bone.name || `Bone ${index + 1}`;
-    dot.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault(); selectBone(bone); });
-    layer.append(dot);
-    boneDots.set(bone, dot);
+  const geometry = new THREE.SphereGeometry(1, 10, 8);
+  bones.forEach((bone) => {
+    const material = new THREE.MeshBasicMaterial({ color: '#e8f3f7', depthTest: false, depthWrite: false, toneMapped: false });
+    const marker = new THREE.Mesh(geometry, material);
+    marker.name = `Bone handle: ${bone.name || 'Bone'}`;
+    marker.userData.boneHandleTarget = bone;
+    marker.renderOrder = 1001;
+    marker.visible = animationMode;
+    scene.add(marker);
+    boneDots.set(bone, marker);
   });
   refreshBoneList();
   updateBoneMarkers();
@@ -407,6 +419,7 @@ function selectBone(bone) {
   window.editorGizmo?.setMode(activeTool === 'select' ? 'rotate' : activeTool);
   $('#timelineTrackName').textContent = bone.name || 'Bone';
   if (!animationMode) toggleAnimationMode();
+  rebuildTimeline();
   document.querySelectorAll('.anim-track').forEach((track) => track.classList.toggle('selected', track.dataset.uuid === bone.uuid));
   refreshBoneList();
   updateBoneMarkers();
@@ -415,10 +428,24 @@ function makeAnimTrack(node, title) {
   const track = document.createElement('div');
   track.className = 'anim-track';
   track.dataset.uuid = node.uuid;
-  track.type = 'button';
-  track.innerHTML = `<span class="track-label"></span><span class="track-keys"></span>`;
+  track.innerHTML = `<span class="track-label"></span>`;
   track.querySelector('.track-label').textContent = title;
-  track.addEventListener('click', () => { activeAnimationTarget = node; if (node.isBone) selectBone(node); else { selected = node; $('#timelineTrackName').textContent = node.name; window.editorGizmo?.attach(node); document.querySelectorAll('.anim-track').forEach((item) => item.classList.toggle('selected', item === track)); } });
+  track.addEventListener('pointerdown', (event) => {
+    if (event.target.closest('.key-dot')) return;
+    activeAnimationTarget = node;
+    if (node.isBone) selectBone(node);
+    else {
+      selected = node;
+      $('#timelineTrackName').textContent = node.name;
+      window.editorGizmo?.attach(node);
+      window.editorGizmo?.setMode('translate');
+      document.querySelectorAll('.anim-track').forEach((item) => item.classList.toggle('selected', item === track));
+    }
+    if (event.offsetX > track.clientWidth * 0.2) {
+      const bounds = track.getBoundingClientRect();
+      setFrame(Math.round(THREE.MathUtils.clamp((event.clientX - bounds.left) / bounds.width, 0, 1) * 120));
+    }
+  });
   $('#timelineRuler').append(track);
 }
 function rebuildTimeline() {
@@ -434,18 +461,29 @@ function rebuildTimeline() {
     tick.textContent = String(frame);
     ruler.append(tick);
   }
-  if (currentModel) for (const bone of allBones()) makeAnimTrack(bone, bone.name || 'Bone');
-  if (!currentModel) for (const object of objects) makeAnimTrack(object, object.name);
+  const animatedIds = new Set();
+  for (const pose of keyframes.values()) for (const uuid of pose.keys()) animatedIds.add(uuid);
+  const target = activeAnimationTarget || boneTarget || selected;
+  const trackTargets = new Map();
+  for (const node of [...objects, ...allBones()]) if (animatedIds.has(node.uuid)) trackTargets.set(node.uuid, node);
+  if (target) trackTargets.set(target.uuid, target);
+  if (!trackTargets.size && !currentModel && objects.length) trackTargets.set(objects[0].uuid, objects[0]);
+  for (const node of trackTargets.values()) makeAnimTrack(node, node.name || (node.isBone ? 'Hueso' : 'Objeto'));
   updateKeyMarkers();
+  updateFrameControls();
 }
 function updateKeyMarkers() {
   document.querySelectorAll('.anim-track').forEach((track) => {
     track.querySelectorAll('.key-dot').forEach((marker) => marker.remove());
     for (const [frame, pose] of keyframes) {
       if (!pose.has(track.dataset.uuid)) continue;
-      const marker = document.createElement('i');
+      const marker = document.createElement('button');
+      marker.type = 'button';
       marker.className = 'key-dot';
       marker.style.left = `${(frame / 120) * 100}%`;
+      marker.title = `Ir al fotograma ${frame}`;
+      marker.setAttribute('aria-label', `Keyframe ${frame}`);
+      marker.addEventListener('click', (event) => { event.stopPropagation(); setFrame(frame); });
       track.append(marker);
     }
   });
@@ -476,16 +514,18 @@ function toggleAnimationMode() {
   $('#animationTimeline').hidden = !animationMode;
   $('#animMode').innerHTML = animationMode ? 'Animation <span>⌄</span>' : 'Object Mode <span>⌄</span>';
   if (animationMode) {
+    if (currentModel && !boneTarget) boneTarget = allBones()[0] || null;
+    activeAnimationTarget = boneTarget || selected;
+    if (boneTarget) { window.editorGizmo?.attach(boneTarget); window.editorGizmo?.setMode('rotate'); }
     rebuildTimeline();
     if (currentModel) refreshBoneList();
     updateBoneMarkers();
-    activeAnimationTarget = boneTarget || selected;
-    hint.textContent = 'Modo animación · selecciona un hueso y agrega keyframes';
-    if (boneTarget) { window.editorGizmo?.attach(boneTarget); window.editorGizmo?.setMode('rotate'); }
+    hint.textContent = 'Modo animación · manipula el hueso y agrega keyframes';
   } else {
     boneTarget = null;
     if (selected && activeTool !== 'select') { window.editorGizmo?.attach(selected); window.editorGizmo?.setMode(activeTool); }
     else window.editorGizmo?.detach();
+    for (const marker of boneDots.values()) marker.visible = false;
     hint.textContent = 'Arrastra para orbitar · pellizca para acercar';
   }
 }
@@ -592,10 +632,30 @@ new ResizeObserver(() => {
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 250));
 renderer.domElement.addEventListener('pointerdown', (event) => {
-  if (activeTool !== 'select') return;
+  if (window.editorGizmo?.axis || window.editorGizmo?.dragging) return;
   const rect = renderer.domElement.getBoundingClientRect();
   pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
+  if (animationMode) {
+    const bounds = container.getBoundingClientRect();
+    let targetBone = null, nearest = 22;
+    for (const bone of boneDots.keys()) {
+      const screen = bone.getWorldPosition(new THREE.Vector3()).project(camera);
+      if (screen.z < -1 || screen.z > 1) continue;
+      const sx = bounds.left + (screen.x * 0.5 + 0.5) * bounds.width;
+      const sy = bounds.top + (-screen.y * 0.5 + 0.5) * bounds.height;
+      const distance = Math.hypot(event.clientX - sx, event.clientY - sy);
+      if (distance < nearest) { nearest = distance; targetBone = bone; }
+    }
+    if (targetBone) selectBone(targetBone);
+    else if (!currentModel && activeTool === 'select') {
+      const hits = raycaster.intersectObjects(objects, true);
+      const hit = hits[0]?.object;
+      if (hit) { let target = hit; while (target && !objects.includes(target)) target = target.parent; if (target) { selected = target; activeAnimationTarget = target; window.editorGizmo?.attach(target); window.editorGizmo?.setMode('translate'); $('#timelineTrackName').textContent = target.name; rebuildTimeline(); } }
+    }
+    return;
+  }
+  if (activeTool !== 'select') return;
   const hits = raycaster.intersectObjects(objects, true);
   let target = hits[0]?.object || null;
   while (target && !objects.includes(target)) target = target.parent;
@@ -616,7 +676,13 @@ $('#animMode').addEventListener('click', toggleAnimationMode);
 $('#assetsToggle').addEventListener('click', () => { $('#assetsPanel').hidden = !$('#assetsPanel').hidden; });
 $('#assetsClose').addEventListener('click', () => { $('#assetsPanel').hidden = true; });
 document.querySelectorAll('[data-asset]').forEach((button) => button.addEventListener('click', () => addAsset(button.dataset.asset)));
-$('#addKeyframe').addEventListener('click', captureKeyframe);
+$('#addKeyframe').addEventListener('click', () => {
+  if (!animationMode) { animationMode = true; document.body.classList.add('animating'); $('#animationPanel').hidden = false; $('#animationTimeline').hidden = false; $('#animMode').innerHTML = 'Animation <span>⌄</span>'; }
+  if (!activeAnimationTarget) activeAnimationTarget = boneTarget || selected;
+  if (!activeAnimationTarget && currentModel) { boneTarget = allBones()[0] || null; activeAnimationTarget = boneTarget; }
+  rebuildTimeline();
+  captureKeyframe();
+});
 $('#playAnimation').addEventListener('click', togglePlayback);
 $('#frameRange').addEventListener('input', (event) => setFrame(event.target.value));
 $('#frameNumber').addEventListener('change', (event) => setFrame(event.target.value));
