@@ -448,7 +448,7 @@ function captureRenderFrame(width, height) {
   renderCamera.aspect = width / height; renderCamera.updateProjectionMatrix();
   sceneRenderPass.camera = renderCamera;
   if (postEnabled) composer.render(); else renderer.render(scene, renderCamera);
-  const canvas = renderer.domElement;
+  const canvas = postEnabled ? composer.domElement : renderer.domElement;
   const blobUrl = canvas.toDataURL('image/png');
   renderer.setPixelRatio(oldRatio); renderer.setSize(oldSize.x, oldSize.y, false);
   composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 0.9)); composer.setSize(oldSize.x, oldSize.y);
@@ -481,7 +481,8 @@ async function exportMp4() {
   if (!support?.supported) { $('#renderStatus').textContent = 'El dispositivo no ofrece H.264 para MP4 en este WebView; no se guardó un video con extensión incorrecta.'; toast('Codificador MP4 no disponible'); return; }
   const target = new BufferTarget();
   const output = new Output({ format: new Mp4OutputFormat(), target });
-  const videoSource = new CanvasSource(renderer.domElement, { codec: 'avc', quality: new Quality({ bitrate: 6000000 }) });
+  const renderCanvas = postEnabled ? composer.domElement : renderer.domElement;
+  const videoSource = new CanvasSource(renderCanvas, { codec: 'avc', quality: new Quality({ bitrate: 6000000 }) });
   output.addVideoTrack(videoSource, { frameRate: 24 });
   const oldSize = new THREE.Vector2(); renderer.getSize(oldSize); const oldRatio = renderer.getPixelRatio(); const renderCamera = cameraMode ? activeCamera : camera; const oldAspect = renderCamera.aspect;
   renderer.setPixelRatio(1); renderer.setSize(width, height, false); composer.setPixelRatio(1); composer.setSize(width, height); renderCamera.aspect = width / height; renderCamera.updateProjectionMatrix();
