@@ -37,6 +37,7 @@ let activeCamera = camera;
 let viewCameraObject = null;
 let cameraMode = false;
 let currentProjectId = null;
+let loadingProjectScene = false;
 let boneTarget = null;
 let activeAnimationTarget = null;
 let assetCount = 0;
@@ -333,8 +334,8 @@ function removeSelected() {
   saveCurrentProject();
 }
 function snapshot() {
-  return { format: 'editor-3d-scene', version: 3, objects: objects.filter((object) => object.userData.kind !== 'Modelo').map((object) => ({
-    name: object.name, kind: object.userData.kind || 'Cubo', position: object.position.toArray(),
+  return { format: 'editor-3d-scene', version: 3, objects: objects.map((object) => ({
+    name: object.name, kind: object.userData.kind || 'Cubo', assetKey: object.userData.kind === 'Modelo' ? (object.userData.assetKey || null) : undefined, position: object.position.toArray(),
     rotation: object.rotation.toArray(), scale: object.scale.toArray(),
     color: `#${object.material?.color?.getHexString?.() || object.color?.getHexString?.() || 'ffffff'}`,
     intensity: object.intensity, distance: object.distance, angle: object.angle, penumbra: object.penumbra,
@@ -346,7 +347,7 @@ function writeProjectList(items) { localStorage.setItem('editor3d:projects', JSO
 let projectSaveTimer = null;
 function scheduleProjectSave() { clearTimeout(projectSaveTimer); projectSaveTimer = setTimeout(saveCurrentProject, 350); }
 function saveCurrentProject() {
-  if (!currentProjectId) return;
+  if (loadingProjectScene || !currentProjectId) return;
   const projects = projectList();
   const project = projects.find((item) => item.id === currentProjectId);
   if (!project) return;
@@ -367,14 +368,13 @@ function renderProjectCards() {
     card.append(preview, title, date); card.addEventListener('click', () => openProject(project.id)); grid.append(card);
   }
 }
-function openProject(id) {
+async function openProject(id) {
   const project = projectList().find((item) => item.id === id);
   if (!project) return;
   currentProjectId = id;
   localStorage.setItem('editor3d:last-project', id);
   $('#projectHome').hidden = true; $('#app').hidden = false;
-  if (project.scene) loadScene(project.scene);
-  else addObject('Cubo');
+  if (project.scene) await loadScene(project.scene);
   if (!objects.length) addObject('Cubo');
   $('#home').title = project.name; updateStatus();
 }
@@ -388,7 +388,7 @@ function confirmCreateProject() {
   const item = { id: `p-${Date.now()}`, name: safeName(name), createdAt: Date.now(), updatedAt: Date.now(), scene: { format: 'editor-3d-scene', version: 2, objects: [] } };
   const projects = projectList(); projects.unshift(item); writeProjectList(projects); $('#projectDialog').hidden = true; renderProjectCards(); openProject(item.id);
 }
-function returnToProjects() { saveCurrentProject(); $('#app').hidden = true; $('#projectHome').hidden = false; renderProjectCards(); }
+async function returnToProjects() { saveCurrentProject(); $('#app').hidden = true; $('#projectHome').hidden = false; renderProjectCards(); }
 function download(name, data, type) {
   const url = URL.createObjectURL(new Blob([data], { type }));
   const anchor = document.createElement('a');
@@ -398,7 +398,7 @@ function download(name, data, type) {
 function openRenderDb() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open('editor3d-storage', 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('handles');
+    request.onupgradeneeded = () => { const db = request.result; if (!db.objectStoreNames.contains('handles')) db.createObjectStore('handles'); if (!db.objectStoreNames.contains('model-assets')) db.createObjectStore('model-assets'); };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
@@ -406,6 +406,15 @@ function openRenderDb() {
 async function storeRenderFolder(handle) {
   try { const db = await openRenderDb(); await new Promise((resolve, reject) => { const tx = db.transaction('handles', 'readwrite'); tx.objectStore('handles').put(handle, 'render-folder'); tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); }); } catch {}
 }
+async function storeModelAsset(key, blob) { const db = await openRenderDb(); await new Promise((resolve, reject) => { const tx = db.transaction('model-assets', 'readwrite'); tx.objectStore('model-assets').put(blob, key); tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); }); }
+async function getModelAsset(key) { const db = await openRenderDb(); return await new Promise((resolve, reject) => { const req = db.transaction('model-assets').objectStore('model-assets').get(key); req.onsuccess = () => resolve(req.result || null); req.onerror = () => reject(req.error); }); }
+async function persistModelAsset(model, clips) {
+  const key = model.userData.assetKey; const position=model.position.clone(), rotation=model.quaternion.clone(), scale=model.scale.clone();
+  model.position.set(0,0,0); model.quaternion.identity(); model.scale.set(1,1,1); model.updateMatrixWorld(true);
+  try { await new Promise((resolve,reject) => new GLTFExporter().parse(model, async (result) => { try { await storeModelAsset(key,new Blob([result],{type:'model/gltf-binary'})); resolve(); } catch(error) { reject(error); } }, reject, {binary:true,animations:clips||[]})); }
+  finally { model.position.copy(position); model.quaternion.copy(rotation); model.scale.copy(scale); model.updateMatrixWorld(true); }
+}
+
 async function restoreRenderFolder() {
   try { const db = await openRenderDb(); return await new Promise((resolve, reject) => { const req = db.transaction('handles').objectStore('handles').get('render-folder'); req.onsuccess = () => resolve(req.result || null); req.onerror = () => reject(req.error); }); } catch { return null; }
 }
@@ -448,8 +457,7 @@ function captureRenderFrame(width, height) {
   renderCamera.aspect = width / height; renderCamera.updateProjectionMatrix();
   sceneRenderPass.camera = renderCamera;
   if (postEnabled) composer.render(); else renderer.render(scene, renderCamera);
-  const canvas = postEnabled ? composer.domElement : renderer.domElement;
-  const blobUrl = canvas.toDataURL('image/png');
+  const blobUrl = renderer.domElement.toDataURL('image/png');
   renderer.setPixelRatio(oldRatio); renderer.setSize(oldSize.x, oldSize.y, false);
   composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 0.9)); composer.setSize(oldSize.x, oldSize.y);
   renderCamera.aspect = oldAspect; renderCamera.updateProjectionMatrix();
@@ -462,14 +470,15 @@ async function exportPng() {
     const dataUrl = captureRenderFrame(width, height);
     const blob = await (await fetch(dataUrl)).blob();
     if (Capacitor.isNativePlatform() || renderFolderHandle) {
-      try { await saveBlobToChosenFolder(`render-${Date.now()}.png`, blob); $('#renderStatus').textContent = 'PNG guardado en la carpeta elegida.'; return; } catch (error) { $('#renderStatus').textContent = error.message || 'No se pudo usar la carpeta elegida.'; }
+      try { await saveBlobToChosenFolder(`render-${Date.now()}.png`, blob); $('#renderStatus').textContent = 'PNG guardado en la carpeta elegida.'; return; } catch (error) { $('#renderStatus').textContent = `Error guardando PNG: ${error.message || error}`; toast(`No se pudo guardar PNG: ${error.message || error}`); return; }
     }
     download(`render-${Date.now()}.png`, blob, 'image/png');
     $('#renderStatus').textContent = 'PNG exportado a Descargas. Si tu Android no permite elegir carpeta en esta WebView, usa el selector de archivos del sistema.';
   } catch (error) { toast(`No se pudo exportar PNG: ${error.message || error}`); }
 }
 async function exportMp4() {
-  const duration = Math.max(1, Math.min(30, Number($('#renderDuration').value) || 5));
+  const duration = Math.max(1, Math.min(15, Number($('#renderDuration').value) || 5));
+  if (Capacitor.isNativePlatform()) { await exportMp4Native(duration); return; }
   if (!('VideoEncoder' in window) || !('VideoFrame' in window)) {
     toast('Este WebView no ofrece codificación H.264 MP4.');
     $('#renderStatus').textContent = 'No se generó MP4: este WebView no incluye WebCodecs H.264. PNG funciona; MP4 requiere un Android/WebView compatible.';
@@ -481,7 +490,7 @@ async function exportMp4() {
   if (!support?.supported) { $('#renderStatus').textContent = 'El dispositivo no ofrece H.264 para MP4 en este WebView; no se guardó un video con extensión incorrecta.'; toast('Codificador MP4 no disponible'); return; }
   const target = new BufferTarget();
   const output = new Output({ format: new Mp4OutputFormat(), target });
-  const renderCanvas = postEnabled ? composer.domElement : renderer.domElement;
+  const renderCanvas = renderer.domElement;
   const videoSource = new CanvasSource(renderCanvas, { codec: 'avc', quality: new Quality({ bitrate: 6000000 }) });
   output.addVideoTrack(videoSource, { frameRate: 24 });
   const oldSize = new THREE.Vector2(); renderer.getSize(oldSize); const oldRatio = renderer.getPixelRatio(); const renderCamera = cameraMode ? activeCamera : camera; const oldAspect = renderCamera.aspect;
@@ -500,11 +509,22 @@ async function exportMp4() {
     }
     await output.finalize();
     const blob = new Blob([target.buffer], { type: 'video/mp4' }); const name = `render-${Date.now()}.mp4`;
-    if (renderFolderHandle) { try { await saveBlobToChosenFolder(name, blob); } catch (error) { download(name, blob, 'video/mp4'); $('#renderStatus').textContent = `${error.message || 'Carpeta inaccesible'} · MP4 descargado a Descargas.`; } }
+    if (Capacitor.isNativePlatform() || renderFolderHandle) await saveBlobToChosenFolder(name, blob);
     else download(name, blob, 'video/mp4');
     $('#renderStatus').textContent = 'MP4 H.264 exportado.'; toast('Render MP4 listo');
   } catch (error) { console.error(error); toast(`No se pudo renderizar MP4: ${error.message || error}`); $('#renderStatus').textContent = `Falló la exportación MP4: ${error.message || error}`; }
   finally { renderer.setPixelRatio(oldRatio); renderer.setSize(oldSize.x, oldSize.y, false); composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 0.9)); composer.setSize(oldSize.x, oldSize.y); renderCamera.aspect = oldAspect; renderCamera.updateProjectionMatrix(); sceneRenderPass.camera = cameraMode ? activeCamera : camera; if (keyframes.size) interpolatePose(currentFrame); }
+}
+async function exportMp4Native(duration) {
+  const [width,height]=renderSize(), fps=24, total=duration*fps, renderCamera=cameraMode?activeCamera:camera;
+  const oldSize=new THREE.Vector2();renderer.getSize(oldSize);const oldRatio=renderer.getPixelRatio(),oldAspect=renderCamera.aspect;
+  try {
+    renderer.setPixelRatio(1);renderer.setSize(width,height,false);composer.setPixelRatio(1);composer.setSize(width,height);renderCamera.aspect=width/height;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=renderCamera;
+    await NativeRenderExport.startVideo({width,height,fps});$('#renderStatus').textContent=`Renderizando MP4 · ${duration} s…`;
+    for(let i=0;i<total;i++){if(keyframes.size)interpolatePose(Math.round(i/Math.max(1,total-1)*120));else if(importedMixer&&importedAnimationAction)importedMixer.setTime(i/fps);if(postEnabled)composer.render();else renderer.render(scene,renderCamera);const jpeg=renderer.domElement.toDataURL('image/jpeg',0.82).split(',')[1];await NativeRenderExport.addVideoFrame({jpeg});if(i%3===0){$('#renderStatus').textContent=`Renderizando MP4 · ${Math.floor((i+1)/total*100)}%`;await new Promise(resolve=>requestAnimationFrame(resolve));}}
+    await NativeRenderExport.finishVideo();$('#renderStatus').textContent='MP4 guardado en la carpeta elegida.';toast('Exportación MP4 lista');
+  } catch(error){console.error(error);$('#renderStatus').textContent=`Falló la exportación MP4: ${error.message||error}`;toast(`No se pudo exportar MP4: ${error.message||error}`);}
+  finally{renderer.setPixelRatio(oldRatio);renderer.setSize(oldSize.x,oldSize.y,false);composer.setPixelRatio(Math.min(window.devicePixelRatio||1,0.9));composer.setSize(oldSize.x,oldSize.y);renderCamera.aspect=oldAspect;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=cameraMode?activeCamera:camera;if(keyframes.size)interpolatePose(currentFrame);}
 }
 let renderFolderHandle = null;
 async function chooseRenderFolder() {
@@ -518,17 +538,21 @@ async function chooseRenderFolder() {
   $('#renderStatus').textContent = 'Este navegador no admite elegir una carpeta; el archivo exportado se descargará a Descargas.';
   toast('Elige carpeta no está disponible en este navegador');
 }
-function saveScene() {
-  download('mi-escena-3d.json', JSON.stringify(snapshot(), null, 2), 'application/json');
-  toast('Escena guardada');
+async function saveScene() {
+  const data=snapshot(); data.modelAssets=[];
+  try { for (const object of objects.filter(item=>item.userData.kind==='Modelo'&&item.userData.assetKey)) { const blob=await getModelAsset(object.userData.assetKey); if(!blob) continue; const bytes=new Uint8Array(await blob.arrayBuffer()); let binary=''; for(let i=0;i<bytes.length;i+=0x8000) binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000)); data.modelAssets.push({key:object.userData.assetKey,data:btoa(binary)}); } download('mi-escena-3d.json',JSON.stringify(data,null,2),'application/json'); toast('Escena y modelos guardados'); } catch(error) { console.error(error); toast(`No se pudo guardar escena: ${error.message||error}`); }
 }
-function loadScene(data) {
+async function loadScene(data) {
+  if (Array.isArray(data?.modelAssets)) for (const asset of data.modelAssets) if (asset?.key&&asset?.data) { const binary=atob(asset.data); const bytes=new Uint8Array(binary.length); for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i); await storeModelAsset(asset.key,new Blob([bytes],{type:'model/gltf-binary'})); }
   if (data?.format !== 'editor-3d-scene' || !Array.isArray(data.objects)) throw new Error('Archivo de escena no válido');
   for (const object of [...objects]) { scene.remove(object); if (object.userData.helper) scene.remove(object.userData.helper); }
   for (const marker of boneDots.values()) scene.remove(marker);
   boneDots.clear(); objects.length = 0; assetObjects.length = 0; selected = null; currentModel = null; boneTarget = null; importedMixer = null; importedClips = []; importedAnimationAction = null; viewCameraObject = null; $('#animationPanel').querySelector('.clip-box')?.remove();
   $('#enterCamera').hidden = true; if (cameraMode) exitCameraView();
+  loadingProjectScene = true;
+  const modelItems=[];
   for (const item of data.objects.slice(0, 300)) {
+    if(item.kind==='Modelo'){modelItems.push(item);continue;}
     let object;
     if (item.kind === 'Cámara') { addAsset('camera'); object = objects.at(-1); }
     else if (item.kind === 'Luz puntual') { addAsset('point'); object = objects.at(-1); }
@@ -542,8 +566,10 @@ function loadScene(data) {
     if (object.isLight) { object.intensity = item.intensity ?? object.intensity; if ('distance' in object) object.distance = item.distance ?? object.distance; if ('angle' in object) object.angle = item.angle ?? object.angle; if ('penumbra' in object) object.penumbra = item.penumbra ?? object.penumbra; }
     if (object.isCamera) { object.fov = item.fov || object.fov; object.near = item.near || object.near; object.far = item.far || object.far; object.updateProjectionMatrix(); object.userData.helper?.update(); viewCameraObject = object; }
   }
+  for(const item of modelItems){if(!item.assetKey)continue;try{const blob=await getModelAsset(item.assetKey);if(!blob)continue;const buffer=await blob.arrayBuffer();await new Promise((resolve,reject)=>new GLTFLoader().parse(buffer,'',(gltf)=>{const model=gltf.scene;model.name=safeName(item.name||'Modelo');model.userData.kind='Modelo';model.userData.assetKey=item.assetKey;model.position.fromArray(item.position||[0,0,0]);model.rotation.fromArray(item.rotation||[0,0,0]);model.scale.fromArray(item.scale||[1,1,1]);model.traverse(child=>{if(child.isMesh){child.castShadow=true;child.receiveShadow=true;}});scene.add(model);objects.push(model);currentModel=model;importedClips=gltf.animations||[];importedMixer=importedClips.length?new THREE.AnimationMixer(model):null;makeBoneMarkers(model);resolve();},reject));}catch(error){console.warn('Could not restore imported model',error);}}
+  loadingProjectScene=false;
   if (viewCameraObject) $('#enterCamera').hidden = false;
-  refreshList(); renderProperties(); updateStatus(); saveCurrentProject(); toast('Escena importada');
+  refreshList(); renderProperties(); updateStatus(); saveCurrentProject(); toast('Escena y modelos cargados');
 }
 function importFile(file) {
   if (!file) return;
@@ -558,8 +584,10 @@ function importFile(file) {
     model.userData.kind = 'Modelo';
     model.traverse((child) => { if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; } });
     if (importedAnimationAction) { importedAnimationAction.stop(); importedAnimationAction = null; }
+    model.userData.assetKey = `model-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
     scene.add(model); objects.push(model); currentModel = model; boneTarget = null; select(model); makeBoneMarkers(model);
     importedClips = gltf.animations || [];
+    persistModelAsset(model, importedClips).then(() => { saveCurrentProject(); toast('Modelo y animaciones guardados en el proyecto'); }).catch(error => { console.error(error); toast('No se pudo guardar el modelo importado'); });
     importedMixer = importedClips.length ? new THREE.AnimationMixer(model) : null;
     if (importedMixer) {
       $('#animationPanel').querySelector('.clip-box')?.remove();
@@ -609,7 +637,8 @@ function allBones() {
 }
 function updateBoneMarkers() {
   if (!currentModel) return;
-  camera.updateMatrixWorld();
+  const markerCamera = cameraMode ? activeCamera : camera;
+  markerCamera.updateMatrixWorld();
   currentModel.updateMatrixWorld(true);
   const worldPosition = new THREE.Vector3();
   const height = Math.max(1, container.clientHeight);
@@ -618,8 +647,8 @@ function updateBoneMarkers() {
     if (!animationMode) continue;
     bone.getWorldPosition(worldPosition);
     marker.position.copy(worldPosition);
-    const distance = Math.max(0.1, camera.position.distanceTo(worldPosition));
-    const radius = THREE.MathUtils.clamp(2.8 * 2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) / height, 0.006, 0.04);
+    const distance = Math.max(0.1, markerCamera.position.distanceTo(worldPosition));
+    const radius = THREE.MathUtils.clamp(2.8 * 2 * distance * Math.tan(THREE.MathUtils.degToRad(markerCamera.fov * 0.5)) / height, 0.006, 0.04);
     marker.scale.setScalar(radius);
     marker.material.color.set(bone === boneTarget ? '#fff4c2' : '#e8f3f7');
   }
@@ -915,7 +944,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     const bounds = container.getBoundingClientRect();
     let targetBone = null, nearest = 22;
     for (const bone of boneDots.keys()) {
-      const screen = bone.getWorldPosition(new THREE.Vector3()).project(camera);
+      const screen = bone.getWorldPosition(new THREE.Vector3()).project(cameraMode ? activeCamera : camera);
       if (screen.z < -1 || screen.z > 1) continue;
       const sx = bounds.left + (screen.x * 0.5 + 0.5) * bounds.width;
       const sy = bounds.top + (-screen.y * 0.5 + 0.5) * bounds.height;
@@ -1014,6 +1043,7 @@ function frame() {
   orbit.update();
   lightPostPass.uniforms.time.value += 0.016;
   if (importedMixer && importedAnimationAction) importedMixer.update(1 / 60);
+  if (currentModel && animationMode) updateBoneMarkers();
   if (postEnabled) { sceneRenderPass.camera = cameraMode ? activeCamera : camera; composer.render(); }
   else renderer.render(scene, cameraMode ? activeCamera : camera);
 }
