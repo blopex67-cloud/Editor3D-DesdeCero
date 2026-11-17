@@ -15,7 +15,7 @@
         <button id="importScene" title="Importar escena">▧</button>
         <button id="exportScene" title="Exportar escena">⇧</button>
       </div>
-      <button class="mode">Object Mode <span>⌄</span></button>
+      <button class="mode" id="animMode">Object Mode <span>⌄</span></button>
       <div class="top-actions">
         <button id="undo" title="Deshacer">↶</button>
         <button class="top-select" title="Seleccionar">◉</button>
@@ -38,12 +38,19 @@
         <div id="scene"></div>
         <div class="left-overlay"><button title="Mover">✣</button><button title="Girar">⟳</button></div>
         <div class="right-overlay"><button title="Vista cámara">◉</button><button title="Vista escena">◈</button></div>
-        <div class="view-tools"><button id="frame" title="Centrar vista">⊙</button><button id="gridToggle" title="Cuadrícula">▦</button><button title="Vista">◐</button></div>
+        <div class="view-tools"><button id="frame" title="Centrar vista">⊙</button><button id="gridToggle" title="Cuadrícula">▦</button><button id="postToggle" title="Postprocesado PBR liviano">RA</button></div>
         <div class="toast" id="toast"></div>
       </section>
       <aside class="right-panel">
         <section class="outliner">
           <div class="panel-tabs"><span>Hierarchy</span><span>Scene</span></div>
+          <div class="animation-panel" id="animationPanel" hidden>
+            <div class="anim-head"><span>ANIMACIÓN</span><button id="addBoneTrack" title="Añadir pista de hueso">＋ Hueso</button></div>
+            <div class="anim-actions"><button id="addKeyframe">◆ Keyframe</button><button id="playAnimation">▶</button></div>
+            <div class="timeline-row"><button id="prevFrame">◀</button><input id="frameRange" type="range" min="0" max="120" value="0"><button id="nextFrame">▶</button></div>
+            <div class="frame-label"><span>Fotograma</span><input id="frameNumber" type="number" min="0" max="120" value="0"></div>
+            <div class="bone-list" id="boneList">Carga un modelo con armature</div>
+          </div>
           <div class="collection">▾ &nbsp;Scene Collection</div>
           <div id="objectList"></div>
         </section>
