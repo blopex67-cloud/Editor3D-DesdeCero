@@ -12,9 +12,7 @@
     "@capacitor/android": "^7.4.3",
     "@capacitor/core": "^7.4.3",
     "three": "^0.179.1",
-    "mediabunny": "^1.66.0",
-    "fflate": "^0.8.2",
-    "@msgpack/msgpack": "^3.1.2"
+    "mediabunny": "^1.66.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.4.3",
