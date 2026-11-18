@@ -101,7 +101,7 @@ public class RenderExportPlugin extends Plugin {{
       videoMuxer=new MediaMuxer(videoTemp.getAbsolutePath(),MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
       MediaFormat fmt=MediaFormat.createVideoFormat("video/avc",videoWidth,videoHeight);
       videoColorFormat=chooseYuvColorFormat(); fmt.setInteger(MediaFormat.KEY_COLOR_FORMAT,videoColorFormat);
-      fmt.setInteger(MediaFormat.KEY_BIT_RATE,Math.min(8000000,Math.max(1000000,videoWidth*videoHeight*3)));
+      fmt.setInteger(MediaFormat.KEY_BIT_RATE,Math.min(18000000,Math.max(2000000,videoWidth*videoHeight*5)));
       fmt.setInteger(MediaFormat.KEY_FRAME_RATE,videoFps); fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL,2);
       videoEncoder=MediaCodec.createEncoderByType("video/avc"); videoEncoder.configure(fmt,null,null,MediaCodec.CONFIGURE_FLAG_ENCODE); videoEncoder.start(); call.resolve();
     }} catch(Exception e) {{ cleanupVideo(); call.reject("No se pudo iniciar codificador MP4: "+e.getMessage(),e); }}
