@@ -26,7 +26,6 @@
         <button id="undo" title="Deshacer">↶</button>
         <button id="objectsPanelToggle" title="Abrir o cerrar objetos">Objetos</button>
         <button id="materialPanelToggle" title="Abrir o cerrar material">Material</button>
-        <button id="skyPanelToggle" title="Cielo, día y noche">SKY</button>
         <button id="assetsToggle" title="Abrir biblioteca de assets">Assets</button>
       </div>
     </header>
@@ -61,7 +60,6 @@
         <div class="toast" id="toast"></div>
       </section>
       <aside class="right-panel">
-        <section class="sky-panel" id="skyPanel" hidden><div class="assets-head"><b>SKY · CIELO REALISTA</b><button id="skyClose">×</button></div><label>Pack de cielo<select id="skyPreset"><option value="day">Día claro</option><option value="sunset">Atardecer</option><option value="night">Noche estrellada</option><option value="cloudy">Nublado</option></select></label><button id="skyApply">Aplicar cielo</button><small class="sky-static-note">Las nubes quedan estáticas para cuidar el rendimiento móvil.</small><label>Hora del día<input id="skyTime" type="range" min="0" max="24" step="0.1" value="14"><output id="skyTimeValue">14:00</output></label><small>Cielo procedural, con nubes animadas; funciona sin conexión y conserva el material pintado.</small></section>
         <section class="outliner">
           <div class="panel-tabs"><span>Hierarchy</span><span>Scene</span></div>
           <div class="animation-panel" id="animationPanel" hidden>
