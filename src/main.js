@@ -12,8 +12,8 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality } from 'mediabunny';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 const NativeRenderExport = registerPlugin('RenderExport');
-let skyMesh=null,skyAnimationTime=0;
-let skyState={preset:'day',movingClouds:false,cloudSpeed:0.6,timeOfDay:14};
+let skyMesh=null;
+let skyState={preset:'day',timeOfDay:14};
 import '../style.css';
 
 const $ = (selector) => document.querySelector(selector);
@@ -146,16 +146,28 @@ const environmentScene=new RoomEnvironment();
 scene.environment=environmentGenerator.fromScene(environmentScene,0.04).texture;
 scene.environmentIntensity=0.85;
 environmentGenerator.dispose();
-function createSky(){
-  const material=new THREE.ShaderMaterial({side:THREE.BackSide,depthWrite:false,depthTest:false,uniforms:{uTime:{value:0},uPreset:{value:0},uClouds:{value:0},uSpeed:{value:0.6},uHour:{value:14}},vertexShader:`varying vec2 vUv;varying vec3 vDir;void main(){vUv=uv;vDir=normalize(position);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,fragmentShader:`varying vec2 vUv;varying vec3 vDir;uniform float uTime;uniform float uPreset;uniform float uClouds;uniform float uSpeed;uniform float uHour;float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453123);}float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);return mix(mix(hash(i),hash(i+vec2(1.,0.)),f.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),f.x),f.y);}float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<5;i++){v+=a*noise(p);p=p*2.03+13.7;a*=.5;}return v;}void main(){float h=clamp(vUv.y,0.,1.);float night=step(1.5,uPreset)*step(uPreset,2.5);float sunset=step(.5,uPreset)*step(uPreset,1.5);float overcast=step(2.5,uPreset)*step(uPreset,3.5);float hourNight=1.-smoothstep(5.5,7.5,uHour)+smoothstep(18.0,20.5,uHour);night=max(night,hourNight);vec3 dayTop=vec3(.10,.43,.78),dayHorizon=vec3(.68,.83,.96);vec3 duskTop=vec3(.15,.20,.43),duskHorizon=vec3(1.,.40,.17);vec3 nightTop=vec3(.008,.018,.07),nightHorizon=vec3(.045,.085,.19);vec3 top=mix(dayTop,duskTop,sunset);vec3 horizon=mix(dayHorizon,duskHorizon,sunset);top=mix(top,nightTop,night);horizon=mix(horizon,nightHorizon,night);vec3 sky=mix(horizon,top,smoothstep(.02,.88,h));float sunY=clamp((uHour-6.)/12.,0.,1.);vec2 sunUv=vec2(.72,.22+.65*sin(sunY*3.14159));float sun=1.-smoothstep(.012,.035,length(vUv-sunUv));sky=mix(sky,vec3(1.,.84,.58),sun*(1.-night));float cloudMix=max(uClouds,overcast*.55);if(cloudMix>.01){vec2 p=vUv*vec2(8.,3.7)+vec2(uTime*uSpeed*.008,0.);float cloud=fbm(p);float cloudMask=smoothstep(.54,.76,cloud);sky=mix(sky,mix(vec3(.93,.96,1.),vec3(.43,.50,.61),overcast),cloudMask*cloudMix*.78);}float stars=step(.996,hash(floor(vUv*vec2(180.,85.))))*(1.-smoothstep(.12,.42,h))*night;sky+=vec3(.75,.84,1.)*stars*(.7+.3*sin(uTime*1.5+hash(floor(vUv*300.))*6.));gl_FragColor=vec4(sky,1.);}`});
-  skyMesh=new THREE.Mesh(new THREE.SphereGeometry(150,32,20),material);skyMesh.name='Cielo procedural';skyMesh.renderOrder=-1000;skyMesh.frustumCulled=false;scene.add(skyMesh);
+function buildSkyTexture(preset,hour){
+  const canvas=document.createElement('canvas');canvas.width=512;canvas.height=256;const ctx=canvas.getContext('2d');
+  const night=preset==='night'||hour<6||hour>19,sunset=preset==='sunset'||(hour>=17&&hour<=19),cloudy=preset==='cloudy';
+  const top=night?'#07132e':sunset?'#263b65':'#247ac0',horizon=night?'#243454':sunset?'#ff9b63':cloudy?'#aab9c5':'#bfdcf0';
+  const grad=ctx.createLinearGradient(0,0,0,canvas.height);grad.addColorStop(0,top);grad.addColorStop(.64,horizon);grad.addColorStop(1,night?'#647286':sunset?'#ffcf8e':cloudy?'#d0d6da':'#f2ddc2');ctx.fillStyle=grad;ctx.fillRect(0,0,canvas.width,canvas.height);
+  if(night){let seed=1831;const rand=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296;};for(let i=0;i<140;i++){const x=rand()*512,y=rand()*156,r=.4+rand()*1.15;ctx.fillStyle=`rgba(240,246,255,${.35+rand()*.55})`;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();}}
+  else{const sunX=sunset?canvas.width*.75:canvas.width*.82,sunY=canvas.height*.42;const glow=ctx.createRadialGradient(sunX,sunY,2,sunX,sunY,70);glow.addColorStop(0,sunset?'rgba(255,242,194,.95)':'rgba(255,247,214,.98)');glow.addColorStop(.14,sunset?'rgba(255,191,123,.42)':'rgba(255,246,208,.40)');glow.addColorStop(1,'rgba(255,246,208,0)');ctx.fillStyle=glow;ctx.fillRect(sunX-75,sunY-75,150,150);ctx.fillStyle=sunset?'#fff0c8':'#fff8df';ctx.beginPath();ctx.arc(sunX,sunY,9,0,Math.PI*2);ctx.fill();}
+  if(cloudy||preset==='day'){
+    let seed=641+({day:1,sunset:2,night:3,cloudy:4}[preset]||1);const rand=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296;};
+    ctx.save();ctx.filter='blur(7px)';const clusters=cloudy?13:7;
+    for(let c=0;c<clusters;c++){const cx=rand()*canvas.width,cy=35+rand()*125,parts=cloudy?12:8;for(let i=0;i<parts;i++){const x=cx+(rand()-.5)*(cloudy?90:68),y=cy+(rand()-.5)*22,r=cloudy?12+rand()*18:8+rand()*12;ctx.fillStyle=cloudy?'rgba(240,244,247,.55)':'rgba(255,255,255,.42)';ctx.beginPath();ctx.ellipse(x,y,r*1.5,r,0,0,Math.PI*2);ctx.fill();}}
+    ctx.restore();
+  }
+  const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;texture.mapping=THREE.UVMapping;texture.generateMipmaps=true;texture.minFilter=THREE.LinearMipmapLinearFilter;texture.magFilter=THREE.LinearFilter;texture.needsUpdate=true;return texture;
 }
+function createSky(){skyMesh=new THREE.Mesh(new THREE.SphereGeometry(150,24,16),new THREE.MeshBasicMaterial({map:buildSkyTexture('day',14),side:THREE.BackSide,depthWrite:false,depthTest:false,toneMapped:false}));skyMesh.name='Cielo estático';skyMesh.renderOrder=-1000;skyMesh.frustumCulled=false;scene.add(skyMesh);}
 createSky();
 function applySkyState(state={},persist=true){
-  skyState={...skyState,...state};const presets={day:0,sunset:1,night:2,cloudy:3};const preset=skyState.preset||'day';
-  if(skyMesh){skyMesh.material.uniforms.uPreset.value=presets[preset]??0;skyMesh.material.uniforms.uClouds.value=skyState.movingClouds?(preset==='cloudy'?.8:.34):(preset==='cloudy'?.72:.0);skyMesh.material.uniforms.uSpeed.value=skyState.movingClouds?(Number(skyState.cloudSpeed)||.6):0;skyMesh.material.uniforms.uHour.value=Number(skyState.timeOfDay??14);}
-  const t=Number(skyState.timeOfDay??14),night=preset==='night'||t<6||t>19;sun.position.set(Math.cos((t-12)*Math.PI/12)*9,Math.sin((t-6)*Math.PI/12)*10,5);sun.intensity=night ? 0.12 : (preset==='sunset'?1.55:preset==='cloudy'?1.55:2.6);sun.color.set(night?'#8aaaff':preset==='sunset'?'#ffbd83':'#ffffff');scene.environmentIntensity=night ? 0.22 : (preset==='sunset' ? 0.65 : preset==='cloudy' ? 0.58 : 0.85);const hemi=scene.children.find(x=>x.isHemisphereLight);if(hemi){hemi.intensity=night ? 0.28 : preset==='cloudy' ? 0.72 : 1.05;hemi.color.set(night?'#6a83bd':'#fff5e8');}
-  $('#skyTime').value=String(skyState.timeOfDay??14);$('#skyTimeValue').value=`${String(Math.floor(t)).padStart(2,'0')}:${String(Math.round((t%1)*60)).padStart(2,'0')}`;$('#skyPreset').value=preset;$('#skyMovingClouds').checked=!!skyState.movingClouds;$('#skyCloudSpeed').value=String(skyState.cloudSpeed??.6);$('#skyCloudSpeedValue').value=Number(skyState.cloudSpeed??.6).toFixed(1);if(persist)scheduleProjectSave();
+  skyState={preset:state.preset||skyState.preset||'day',timeOfDay:Number(state.timeOfDay??skyState.timeOfDay??14)};const presets={day:0,sunset:1,night:2,cloudy:3};const preset=skyState.preset||'day',t=Number(skyState.timeOfDay??14),night=preset==='night'||t<6||t>19;
+  if(skyMesh){const old=skyMesh.material.map;skyMesh.material.map=buildSkyTexture(preset,t);skyMesh.material.needsUpdate=true;old?.dispose();}
+  sun.position.set(Math.cos((t-12)*Math.PI/12)*9,Math.sin((t-6)*Math.PI/12)*10,5);sun.intensity=night?0.12:(preset==='sunset'?1.55:preset==='cloudy'?1.55:2.6);sun.color.set(night?'#8aaaff':preset==='sunset'?'#ffbd83':'#ffffff');scene.environmentIntensity=night?0.22:(preset==='sunset'?0.65:preset==='cloudy'?0.58:0.85);const hemi=scene.children.find(x=>x.isHemisphereLight);if(hemi){hemi.intensity=night?0.28:preset==='cloudy'?0.72:1.05;hemi.color.set(night?'#6a83bd':'#fff5e8');}
+  $('#skyTime').value=String(t);$('#skyTimeValue').value=`${String(Math.floor(t)).padStart(2,'0')}:${String(Math.round((t%1)*60)).padStart(2,'0')}`;$('#skyPreset').value=preset;if(persist)scheduleProjectSave();
 }
 
 const composer = new EffectComposer(renderer);
@@ -1314,12 +1326,10 @@ $('#exportScene').addEventListener('click', exportGlb);
 $('#importScene').addEventListener('click', async () => {if(Capacitor.isNativePlatform()){try{const file=await NativeRenderExport.readProjectFile();await importPickedFile(file.name,file.data);}catch(error){if(!String(error?.message||error).includes('canceled'))toast(`No se pudo abrir el archivo: ${error.message||error}`);}return;}fileInput.click();});
 $('#importProjectHome').addEventListener('click',async()=>{if(Capacitor.isNativePlatform()){try{const file=await NativeRenderExport.readProjectFile();const raw=atob(file.data);const bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));await importProjectData(JSON.parse(new TextDecoder().decode(bytes)),file.name);}catch(error){if(!String(error?.message||error).includes('canceled'))toast(`No se pudo importar el proyecto: ${error.message||error}`);}return;}$('#projectFileInput').click();});
 $('#projectFileInput').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;try{await importProjectData(JSON.parse(await file.text()),file.name);}catch(error){toast(`No se pudo importar el proyecto: ${error.message||error}`);}finally{e.target.value='';}});
-$('#skyPanelToggle').addEventListener('click',()=>{const panel=$('#skyPanel'),workspace=$('#workspace');const opening=panel.hidden;panel.hidden=!opening;if(opening){$('#materialPanel').hidden=true;workspace.classList.remove('hide-objects','show-material');workspace.classList.add('show-sky');$('#skyPreset').value=skyState.preset;$('#skyMovingClouds').checked=skyState.movingClouds;$('#skyCloudSpeed').value=skyState.cloudSpeed;$('#skyTime').value=skyState.timeOfDay;$('#skyCloudSpeedValue').value=Number(skyState.cloudSpeed).toFixed(1);$('#skyTimeValue').value=`${String(Math.floor(skyState.timeOfDay)).padStart(2,'0')}:${String(Math.round((skyState.timeOfDay%1)*60)).padStart(2,'0')}`;}else workspace.classList.remove('show-sky');});
+$('#skyPanelToggle').addEventListener('click',()=>{const panel=$('#skyPanel'),workspace=$('#workspace');const opening=panel.hidden;panel.hidden=!opening;if(opening){$('#materialPanel').hidden=true;workspace.classList.remove('hide-objects','show-material');workspace.classList.add('show-sky');$('#skyPreset').value=skyState.preset;$('#skyTime').value=skyState.timeOfDay;$('#skyTimeValue').value=`${String(Math.floor(skyState.timeOfDay)).padStart(2,'0')}:${String(Math.round((skyState.timeOfDay%1)*60)).padStart(2,'0')}`;}else workspace.classList.remove('show-sky');});
 $('#skyClose').addEventListener('click',()=>{$('#skyPanel').hidden=true;$('#workspace').classList.remove('show-sky');});
-$('#skyApply').addEventListener('click',()=>{skyState.preset=$('#skyPreset').value;skyState.movingClouds=$('#skyMovingClouds').checked;skyState.cloudSpeed=Number($('#skyCloudSpeed').value);applySkyState(skyState);toast(`Cielo aplicado: ${skyState.preset}`);});
-$('#skyMovingClouds').addEventListener('change',e=>{skyState.movingClouds=e.target.checked;applySkyState(skyState);});
-$('#skyCloudSpeed').addEventListener('input',e=>{skyState.cloudSpeed=Number(e.target.value);$('#skyCloudSpeedValue').value=skyState.cloudSpeed.toFixed(1);applySkyState(skyState);});
-$('#skyTime').addEventListener('input',e=>{skyState.timeOfDay=Number(e.target.value);applySkyState(skyState);});
+$('#skyApply').addEventListener('click',()=>{skyState.preset=$('#skyPreset').value;applySkyState(skyState);toast(`Cielo aplicado: ${skyState.preset}`);});
+let skyUpdateTimer=null;$('#skyTime').addEventListener('input',e=>{skyState.timeOfDay=Number(e.target.value);const t=skyState.timeOfDay;$('#skyTimeValue').value=`${String(Math.floor(t)).padStart(2,'0')}:${String(Math.round((t%1)*60)).padStart(2,'0')}`;sun.intensity=t<6||t>19?.12:2.6;clearTimeout(skyUpdateTimer);skyUpdateTimer=setTimeout(()=>applySkyState(skyState),180);});
 $('#skyPreset').addEventListener('change',e=>{skyState.preset=e.target.value;applySkyState(skyState);});
 fileInput.addEventListener('change', () => { importFile(fileInput.files?.[0]); fileInput.value = ''; });
 $('#gridToggle').addEventListener('click', () => { gridVisible = !gridVisible; grid.visible = gridVisible; });
@@ -1383,7 +1393,7 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
 function frame() {
   requestAnimationFrame(frame);
   orbit.update();
-  lightPostPass.uniforms.time.value += 0.016;skyAnimationTime+=0.016;if(skyMesh)skyMesh.material.uniforms.uTime.value=skyAnimationTime;
+  lightPostPass.uniforms.time.value += 0.016;
   if (importedMixer && importedAnimationAction) importedMixer.update(1 / 60);
   if (currentModel && animationMode) updateBoneMarkers();
 
