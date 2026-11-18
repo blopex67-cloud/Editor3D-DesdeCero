@@ -8,7 +8,8 @@ import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { unzipSync } from 'fflate';
-import { decode as decodeMessagePack } from '@msgpack/msgpack';
+import { decodeMulti as decodeMessagePackMulti } from '@msgpack/msgpack';
+function decodeMessagePack(bytes){const values=[...decodeMessagePackMulti(bytes)];return values.length===1?values[0]:values;}
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
