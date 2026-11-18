@@ -53,6 +53,10 @@ let boneTarget = null;
 let activeAnimationTarget = null;
 let assetCount = 0;
 const keyframes = new Map();
+const animationTrackIds = new Set();
+let copiedKeyframe = null;
+let autoKeyEnabled = false;
+let animationInterpolation='linear';
 const boneDots = new Map();
 const assetObjects = [];
 const objects = [];
@@ -104,7 +108,7 @@ try {
   const gizmo = new TransformControls(camera, renderer.domElement);
   scene.add(gizmo.getHelper());
   gizmo.setSize(1.18);
-  gizmo.addEventListener('dragging-changed', (event) => { orbit.enabled = !event.value;if(event.value&&gizmo.object?.isBone)beginIkDrag(gizmo.object);else if(!event.value&&ikDragState){solveIkDrag();scheduleProjectSave();ikDragState=null;} });
+  gizmo.addEventListener('dragging-changed', (event) => { orbit.enabled = !event.value;if(event.value&&gizmo.object?.isBone)beginIkDrag(gizmo.object);else if(!event.value&&ikDragState){solveIkDrag();scheduleProjectSave();ikDragState=null;}if(!event.value&&animationMode&&autoKeyEnabled&&gizmo.object)captureKeyframe(gizmo.object); });
   gizmo.addEventListener('change', () => updateBoneMarkers());
   // Keep Three.js axis handles functional, with distinct high-visibility neon RGB colors.
   gizmo.setColors('#ff1744', '#39ff14', '#00b7ff', '#fff200');
@@ -182,7 +186,7 @@ function updateStatus() {
   $('#status').textContent = `${currentProjectId ? (projectList().find((p) => p.id === currentProjectId)?.name || 'Proyecto') + ' · ' : ''}${objects.length} objeto${objects.length === 1 ? '' : 's'}`;
 }
 function addAsset(kind) {
-  lightingBaked=false;
+  animationNodesCache=null;lightingBaked=false;
   if (kind === 'point' || kind === 'directional') {
     const liveLights = assetObjects.filter((asset) => asset.isPointLight || asset.isDirectionalLight).length;
     if (liveLights >= 4) { toast('Límite móvil: usa hasta 4 luces locales'); return; }
@@ -251,7 +255,7 @@ function refreshList() {
   list.replaceChildren();
   for (const object of objects) {
     const row = document.createElement('button');
-    row.className = `object-row${object === selected ? ' selected' : ''}`;
+    row.className = `object-row${object === selected||selected?.isObject3D&&object.getObjectById(selected.id)===selected ? ' selected' : ''}`;
     row.dataset.key = object.uuid;
     const icon = document.createElement('span');
     icon.textContent = object.userData.kind === 'Esfera' ? '◉' : object.userData.kind === 'Modelo' ? '◈' : '⬡'; if(materialTargetsFor(object).some(mesh=>wetSurfaces.has(mesh.uuid)))icon.textContent+=' 💧';
@@ -267,6 +271,7 @@ function safeName(value) {
 }
 function select(object) {
   selected = object;
+  if(animationMode&&object){boneTarget=null;activeAnimationTarget=object;animationTrackIds.add(object.uuid);}
   if (window.editorGizmo) {
     const target = animationMode && boneTarget ? boneTarget : object;
     if (target && animationMode) {
@@ -278,6 +283,7 @@ function select(object) {
     } else window.editorGizmo.detach();
   }
   refreshList();
+  if(animationMode){refreshAnimationNodePicker();renderAnimationTrackList();$('#timelineTrackName').textContent=activeAnimationTarget?getAnimationNodeLabel(activeAnimationTarget):'Selecciona una pista';rebuildTimeline();}
   renderProperties();
   if(!$('#materialPanel').hidden) refreshMaterialPanel();
   refreshBoneList();
@@ -309,6 +315,7 @@ function applyCubeFinish(){
   mesh.geometry.computeVertexNormals();mesh.geometry.computeBoundingBox();mesh.geometry.computeBoundingSphere();lightingBaked=false;renderProperties();refreshMaterialPanel();scheduleProjectSave();toast(`Acabado aplicado: ${finish}`);
 }
 function addObject(kind = 'Cubo', position = [0, 0.65, 0], color = null) {
+  animationNodesCache=null;
   lightingBaked=false;
   const geometry = kind === 'Esfera' ? new THREE.SphereGeometry(0.62, 24, 16)
     : kind === 'Plano' ? new THREE.PlaneGeometry(1.5, 1.5)
@@ -481,12 +488,12 @@ function renderProperties() {
   $('#selectedCameraView')?.addEventListener('click', () => enterCameraView(selected));
   $('#alignCameraView')?.addEventListener('click',()=>{selected.position.copy(camera.position);selected.quaternion.copy(camera.quaternion);selected.up.set(0,1,0);selected.lookAt(orbit.target);selected.updateProjectionMatrix();selected.userData.helper?.update();scheduleProjectSave();toast('Cámara alineada con la vista del editor');});
   const lightChanged=()=>{lightingBaked=false;selected.userData.helper?.update?.();scheduleProjectSave();};
-  $('#lightColor')?.addEventListener('input',e=>{selected.color.set(e.target.value);lightChanged();});
-  $('#lightIntensity')?.addEventListener('input',e=>{selected.intensity=Number(e.target.value);e.target.nextElementSibling.value=selected.intensity.toFixed(2);lightChanged();});
+  $('#lightColor')?.addEventListener('input',e=>{selected.color.set(e.target.value);lightChanged();});$('#lightColor')?.addEventListener('change',()=>{if(animationMode&&autoKeyEnabled)captureKeyframe(selected);});
+  $('#lightIntensity')?.addEventListener('input',e=>{selected.intensity=Number(e.target.value);e.target.nextElementSibling.value=selected.intensity.toFixed(2);lightChanged();});$('#lightIntensity')?.addEventListener('change',()=>{if(animationMode&&autoKeyEnabled)captureKeyframe(selected);});
   $('#lightDistance')?.addEventListener('input',e=>{selected.distance=Number(e.target.value);e.target.nextElementSibling.value=selected.distance.toFixed(2);lightChanged();});
   $('#lightAngle')?.addEventListener('input',e=>{selected.angle=Number(e.target.value);e.target.nextElementSibling.value=`${THREE.MathUtils.radToDeg(selected.angle).toFixed(0)}°`;lightChanged();});
   $('#lightPenumbra')?.addEventListener('input',e=>{selected.penumbra=Number(e.target.value);e.target.nextElementSibling.value=selected.penumbra.toFixed(2);lightChanged();});
-  $('#cameraFov')?.addEventListener('input',e=>{selected.fov=Number(e.target.value);selected.updateProjectionMatrix();e.target.nextElementSibling.value=`${selected.fov}°`;selected.userData.helper?.update();scheduleProjectSave();});
+  $('#cameraFov')?.addEventListener('input',e=>{selected.fov=Number(e.target.value);selected.updateProjectionMatrix();e.target.nextElementSibling.value=`${selected.fov}°`;selected.userData.helper?.update();scheduleProjectSave();});$('#cameraFov')?.addEventListener('change',()=>{if(animationMode&&autoKeyEnabled)captureKeyframe(selected);});
   $('#cameraNear')?.addEventListener('change',e=>{selected.near=Math.max(0.005,Number(e.target.value)||0.01);selected.updateProjectionMatrix();selected.userData.helper?.update();scheduleProjectSave();});
   $('#cameraFar')?.addEventListener('change',e=>{selected.far=Math.max(selected.near+1,Number(e.target.value)||100);selected.updateProjectionMatrix();selected.userData.helper?.update();scheduleProjectSave();});
   props.querySelectorAll('[data-axis]').forEach((input) => input.addEventListener('change', () => {
@@ -497,6 +504,7 @@ function renderProperties() {
     if (input.dataset.kind === 'scale') selected.scale.setComponent(axis, Math.max(0.01, value));
     if (selected.isCamera && selected.userData.helper) selected.userData.helper.update();
     if (selected.userData.helper?.update) selected.userData.helper.update();
+    if(animationMode&&autoKeyEnabled)captureKeyframe(selected);
     lightingBaked=false;markReflectionDirty();saveCurrentProject();
   }));
 }
@@ -507,7 +515,7 @@ function setTool(tool) {
   hint.textContent = messages[tool] || messages.select;
 }
 function duplicateSelected() {
-  if(!selected){toast('Selecciona un objeto para duplicar');return;}
+  animationNodesCache=null;if(!selected){toast('Selecciona un objeto para duplicar');return;}
   lightingBaked=false;const originalHelper=selected.userData.helper;selected.userData.helper=null;let copy;try{copy=selected.clone(true);}finally{selected.userData.helper=originalHelper;}copy.name=`${selected.name} copia`;copy.position.x+=0.35;copy.userData={...copy.userData,helper:null};
   copy.traverse(node=>{if(node.isMesh){const mats=Array.isArray(node.material)?node.material: [node.material];const cloned=mats.map(mat=>mat.clone());node.material=Array.isArray(node.material)?cloned:cloned[0];node.castShadow=true;node.receiveShadow=true;}});
   if(copy.userData.helper){scene.remove(copy.userData.helper);copy.userData.helper=null;}
@@ -517,22 +525,26 @@ function duplicateSelected() {
 }
 function removeSelected() {
   if (!selected) return;
+  if(!objects.includes(selected)){let root=selected;while(root.parent&&!objects.includes(root))root=root.parent;selected=root;}
   lightingBaked=false;
+  const removedAnimationNodes=getAnimatableNodes().filter(item=>item===selected||selected.getObjectById(item.id));
   for(const mesh of materialTargetsFor(selected))if(wetSurfaces.has(mesh.uuid))disableWetSurface(mesh);
   scene.remove(selected);
   if (selected.userData.helper) scene.remove(selected.userData.helper);
+  for(const node of removedAnimationNodes){animationTrackIds.delete(node.uuid);for(const pose of keyframes.values())pose.delete(node.uuid);}animationTrackCache=null;animationNodesCache=null;
   objects.splice(objects.indexOf(selected), 1);
   if (selected === viewCameraObject) viewCameraObject = objects.find((item) => item.isCamera) || null;
   selected = null;
   $('#enterCamera').hidden = !viewCameraObject;
   refreshList();
+  if(animationMode){refreshAnimationNodePicker();renderAnimationTrackList();rebuildTimeline();}
   renderProperties();
   updateStatus();
   saveCurrentProject();
 }
 function snapshot() {
   const modelPoses=[];for(const root of objects.filter(item=>item.userData.kind==='Modelo'))root.traverse(node=>{if(!node.isBone)return;const path=[];let current=node;while(current&&current!==root){const parent=current.parent;if(!parent)break;path.unshift(parent.children.indexOf(current));current=parent;}modelPoses.push({owner:root.userData.assetKey||root.name,path,position:node.position.toArray(),quaternion:node.quaternion.toArray(),scale:node.scale.toArray()});});
-  const animationData={loop:animationLoop,keyframes:[...keyframes.entries()].map(([frame,pose])=>({frame,targets:[...pose.entries()].map(([uuid,transform])=>{const node=[...objects,...allBones()].find(item=>item.uuid===uuid);if(!node)return null;let root=node;while(root.parent&&!objects.includes(root))root=root.parent;const objectIndex=objects.indexOf(root),path=[];let current=node;while(current!==root&&current.parent){path.unshift(current.parent.children.indexOf(current));current=current.parent;}return{name:node.name||'',kind:node.isBone?'bone':'object',owner:node.isBone?(root.name||''):node.userData?.kind||'',objectIndex,path,transform};}).filter(Boolean)}))};
+  const animationData={loop:animationLoop,interpolation:animationInterpolation,tracks:[...animationTrackIds].map(uuid=>{const node=[...objects,...getAnimatableNodes()].find(item=>item.uuid===uuid);if(!node)return null;let root=node;while(root.parent&&!objects.includes(root))root=root.parent;const path=[];let current=node;while(current!==root&&current.parent){path.unshift(current.parent.children.indexOf(current));current=current.parent;}return{objectIndex:objects.indexOf(root),ownerName:root.name||'',ownerKind:root.userData?.kind||'',assetKey:root.userData?.assetKey||null,path};}).filter(Boolean),keyframes:[...keyframes.entries()].map(([frame,pose])=>({frame,targets:[...pose.entries()].map(([uuid,transform])=>{const node=getAnimatableNodes().find(item=>item.uuid===uuid);if(!node)return null;let root=node;while(root.parent&&!objects.includes(root))root=root.parent;const objectIndex=objects.indexOf(root),path=[];let current=node;while(current!==root&&current.parent){path.unshift(current.parent.children.indexOf(current));current=current.parent;}return{name:node.name||'',kind:node.isBone?'bone':'object',owner:node.isBone?(root.name||''):node.userData?.kind||'',ownerName:root.name||'',ownerKind:root.userData?.kind||'',assetKey:root.userData?.assetKey||null,objectIndex,path,transform};}).filter(Boolean)}))};
   return { format: 'editor-3d-scene', version: 8, renderSettings:{postLook:$('#postLook')?.value||'cinematic',postEnabled,realisticMode,gridVisible,activeTool,cameraMode,activeCameraName:cameraMode?activeCamera?.name||'':viewCameraObject?.name||'',selectedName:selected?.name||'',currentFrame}, animation:animationData, modelPoses, objects: objects.map((object) => ({
     name: object.name, kind: object.userData.kind || 'Cubo', assetKey: object.userData.kind === 'Modelo' ? (object.userData.assetKey || null) : undefined, position: object.position.toArray(),
     rotation: object.rotation.toArray(), scale: object.scale.toArray(),
@@ -664,8 +676,8 @@ function renderSize() {
   if (mode === '720') return [1280, 720];
   return [Math.max(2, container.clientWidth & ~1), Math.max(2, container.clientHeight & ~1)];
 }
-function captureScenePose(){const pose=new Map();for(const node of [...objects,...allBones()])pose.set(node.uuid,readTransform(node));return pose;}
-function restoreScenePose(pose){for(const node of [...objects,...allBones()]){const state=pose.get(node.uuid);if(state)writeTransform(node,state);}currentModel?.updateMatrixWorld(true);updateBoneMarkers();}
+function captureScenePose(){const pose=new Map();for(const node of getAnimatableNodes())pose.set(node.uuid,readTransform(node));return pose;}
+function restoreScenePose(pose){for(const node of getAnimatableNodes()){const state=pose.get(node.uuid);if(state)writeTransform(node,state);}currentModel?.updateMatrixWorld(true);updateBoneMarkers();}
 function mobileVideoSize(){const [w0,h0]=renderSize();const scale=Math.min(1,640/w0,360/h0);return[Math.max(2,Math.floor(w0*scale/2)*2),Math.max(2,Math.floor(h0*scale/2)*2)];}
 function hideEditorGuidesForRender() {
   const restore=[];
@@ -829,7 +841,7 @@ async function loadScene(data) {
   clearTimeout(reflectionRefreshTimer);for(const state of wetSurfaces.values()){scene.remove(state.probe);state.target.dispose();}wetSurfaces.clear();reflectionDirty=false;reflectionRefreshDue=0;reflectionStatus('');
   for (const object of [...objects]) { scene.remove(object); if (object.userData.helper) scene.remove(object.userData.helper); }
   for (const marker of boneDots.values()){scene.remove(marker);marker.material?.dispose?.();}
-  boneDots.clear();objects.length=0;assetObjects.length=0;keyframes.clear();animationTrackCache=null;animationNodesCache=null;currentFrame=0;animationLoop=data.animation?.loop!==false;$('#animationLoop').checked=animationLoop;selected = null; currentModel = null; boneTarget = null; importedMixer = null; importedClips = []; importedAnimationAction = null; viewCameraObject = null; $('#animationPanel').querySelector('.clip-box')?.remove();
+  boneDots.clear();objects.length=0;assetObjects.length=0;keyframes.clear();animationTrackIds.clear();animationTrackCache=null;animationNodesCache=null;currentFrame=0;animationLoop=data.animation?.loop!==false;$('#animationLoop').checked=animationLoop;animationInterpolation=data.animation?.interpolation||'linear';if($('#animationInterpolation'))$('#animationInterpolation').value=animationInterpolation;activeAnimationTarget=null;selected = null; currentModel = null; boneTarget = null; importedMixer = null; importedClips = []; importedAnimationAction = null; viewCameraObject = null; $('#animationPanel').querySelector('.clip-box')?.remove();
   $('#enterCamera').hidden = true; if (cameraMode) exitCameraView();
   loadingProjectScene = true;
   const modelItems=[];
@@ -850,14 +862,14 @@ async function loadScene(data) {
     if (object.isLight) { if(item.lightColor)object.color.set(item.lightColor); object.intensity = item.intensity ?? object.intensity; if ('distance' in object) object.distance = item.distance ?? object.distance; if ('angle' in object) object.angle = item.angle ?? object.angle; if ('penumbra' in object) object.penumbra = item.penumbra ?? object.penumbra; }
     if (object.isCamera) { object.fov = item.fov || object.fov; object.near = item.near ? Math.max(0.005,item.near) : object.near; object.far = item.far || object.far; object.updateProjectionMatrix(); object.userData.helper?.update(); viewCameraObject = object; }
   }
-  for(const item of modelItems){if(!item.assetKey)continue;try{const blob=await getModelAsset(item.assetKey);if(!blob)continue;const buffer=await blob.arrayBuffer();await new Promise((resolve,reject)=>new GLTFLoader().parse(buffer,'',(gltf)=>{const model=gltf.scene;model.name=safeName(item.name||'Modelo');model.userData.kind='Modelo';model.userData.assetKey=item.assetKey;model.position.fromArray(item.position||[0,0,0]);model.rotation.fromArray(item.rotation||[0,0,0]);model.scale.fromArray(item.scale||[1,1,1]);restoreMaterialSnapshots(model,item.materials);model.traverse(child=>{if(child.isMesh){child.castShadow=true;child.receiveShadow=true;}});scene.add(model);objects.push(model);currentModel=model;importedClips=gltf.animations||[];importedMixer=importedClips.length?new THREE.AnimationMixer(model):null;if(importedMixer)addImportedClipControls(importedClips,importedMixer);makeBoneMarkers(model);resolve();},reject));}catch(error){console.warn('Could not restore imported model',error);}}
+  for(const item of modelItems){if(!item.assetKey)continue;try{const blob=await getModelAsset(item.assetKey);if(!blob)continue;const buffer=await blob.arrayBuffer();await new Promise((resolve,reject)=>new GLTFLoader().parse(buffer,'',(gltf)=>{const model=gltf.scene;model.name=safeName(item.name||'Modelo');model.userData.kind='Modelo';model.userData.assetKey=item.assetKey;model.position.fromArray(item.position||[0,0,0]);model.rotation.fromArray(item.rotation||[0,0,0]);model.scale.fromArray(item.scale||[1,1,1]);restoreMaterialSnapshots(model,item.materials);model.traverse(child=>{if(child.isMesh){child.castShadow=true;child.receiveShadow=true;}});scene.add(model);objects.push(model);animationNodesCache=null;currentModel=model;importedClips=gltf.animations||[];importedMixer=importedClips.length?new THREE.AnimationMixer(model):null;if(importedMixer)addImportedClipControls(importedClips,importedMixer);makeBoneMarkers(model);resolve();},reject));}catch(error){console.warn('Could not restore imported model',error);}}
   for(const pose of data.modelPoses||[]){const owner=objects.find(item=>item.userData.kind==='Modelo'&&(item.userData.assetKey||item.name)===pose.owner);let node=owner;for(const index of pose.path||[])node=node?.children?.[index];if(node?.isBone){node.position.fromArray(pose.position||[0,0,0]);node.quaternion.fromArray(pose.quaternion||[0,0,0,1]).normalize();node.scale.fromArray(pose.scale||[1,1,1]);}}
-  if(Array.isArray(data.animation?.keyframes)){const nodes=[...objects,...allBones()];for(const row of data.animation.keyframes){const pose=new Map();for(const target of row.targets||[]){let node=null;if(Number.isInteger(target.objectIndex)){node=objects[target.objectIndex]||null;for(const index of target.path||[])node=node?.children?.[index]||null;}if(!node)node=nodes.find(item=>(item.name||'')===target.name&&(item.isBone?target.kind==='bone':(item.userData?.kind||'Cubo')===target.owner));if(node)pose.set(node.uuid,target.transform);}if(pose.size)keyframes.set(Number(row.frame)||0,pose);}animationTrackCache=null;animationNodesCache=null;}
-  currentFrame=Number(data.renderSettings?.currentFrame)||0;loadingProjectScene=false;restoreWetSurfaces();emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();rebuildTimeline();updateFrameControls();
+  if(Array.isArray(data.animation?.tracks)){for(const track of data.animation.tracks){let root=track.assetKey?objects.find(item=>item.userData?.assetKey===track.assetKey):null;if(!root&&track.ownerName)root=objects.find(item=>item.name===track.ownerName&&(!track.ownerKind||item.userData?.kind===track.ownerKind));if(!root)root=objects[track.objectIndex]||null;let node=root;for(const index of track.path||[])node=node?.children?.[index]||null;if(node)animationTrackIds.add(node.uuid);}}if(Array.isArray(data.animation?.keyframes)){const nodes=getAnimatableNodes();for(const row of data.animation.keyframes){const pose=new Map();for(const target of row.targets||[]){let node=null;if(Number.isInteger(target.objectIndex)){let root=target.assetKey?objects.find(item=>item.userData?.assetKey===target.assetKey):null;if(!root&&target.ownerName)root=objects.find(item=>item.name===target.ownerName&&(!target.ownerKind||item.userData?.kind===target.ownerKind));if(!root)root=objects[target.objectIndex]||null;node=root;for(const index of target.path||[])node=node?.children?.[index]||null;}if(!node)node=nodes.find(item=>(item.name||'')===target.name&&(item.isBone?target.kind==='bone':(item.userData?.kind||'Cubo')===target.owner));if(node)pose.set(node.uuid,target.transform);}if(pose.size)keyframes.set(Number(row.frame)||0,pose);}animationTrackCache=null;animationNodesCache=null;}
+  currentFrame=Number(data.renderSettings?.currentFrame)||0;loadingProjectScene=false;if(keyframes.size)interpolatePose(currentFrame);restoreWetSurfaces();emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();rebuildTimeline();updateFrameControls();
   if (viewCameraObject) $('#enterCamera').hidden = false;
   if(data.renderSettings?.selectedName){const previous=objects.find(item=>item.name===data.renderSettings.selectedName);if(previous)selected=previous;}
   if(data.renderSettings?.activeCameraName){const previousCam=objects.find(item=>item.isCamera&&item.name===data.renderSettings.activeCameraName);if(previousCam)viewCameraObject=previousCam;}
-  refreshList();renderProperties();updateStatus();saveCurrentProject();if(data.renderSettings?.cameraMode&&viewCameraObject)enterCameraView(viewCameraObject);toast('Escena y modelos cargados');
+  refreshList();renderProperties();refreshAnimationNodePicker();renderAnimationTrackList();updateStatus();saveCurrentProject();if(data.renderSettings?.cameraMode&&viewCameraObject)enterCameraView(viewCameraObject);toast('Escena y modelos cargados');
 }
 function addImportedClipControls(clips,mixer){
   $('#animationPanel').querySelector('.clip-box')?.remove();if(!mixer||!clips?.length)return;
@@ -869,7 +881,7 @@ function addLoadedModel(gltf,fileName='Modelo GLB'){
   const model=gltf.scene||gltf.scenes?.[0];if(!model)throw new Error('El GLB no contiene una escena');
   model.name=safeName(fileName.replace(/\.(glb|gltf)$/i,''));model.userData.kind='Modelo';model.traverse(child=>{if(child.isMesh){child.castShadow=true;child.receiveShadow=true;for(const mat of materialListFor(child)){mat.needsUpdate=true;}}});
   if(importedAnimationAction){importedAnimationAction.stop();importedAnimationAction=null;}
-  model.userData.assetKey=`model-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;scene.add(model);objects.push(model);currentModel=model;boneTarget=null;select(model);makeBoneMarkers(model);importedClips=gltf.animations||[];
+  model.userData.assetKey=`model-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;scene.add(model);objects.push(model);animationNodesCache=null;currentModel=model;boneTarget=null;select(model);makeBoneMarkers(model);importedClips=gltf.animations||[];
   const modelSave=persistModelAsset(model,importedClips);pendingModelImports.add(modelSave);modelSave.then(()=>{saveCurrentProject();toast('GLB guardado con sus materiales y animaciones');}).catch(error=>{console.error(error);toast(`Modelo visible, pero no se pudo conservar completo: ${error.message||error}`);}).finally(()=>pendingModelImports.delete(modelSave));
   importedMixer=importedClips.length?new THREE.AnimationMixer(model):null;if(importedMixer)addImportedClipControls(importedClips,importedMixer);emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();rebuildTimeline();updateStatus();toast(`GLB importado · ${model.name} · ${allBones().length} huesos`);saveCurrentProject();
 }
@@ -946,14 +958,14 @@ function rotateBoneToward(bone,from,to,child=null){
 }
 function allBones() {
   const found = [];
-  currentModel?.traverse((node) => { if (node.isBone) found.push(node); });
-  return found;
+  for(const root of objects)if(root.userData?.kind==='Modelo'||root===currentModel)root.traverse?.(node=>{if(node.isBone)found.push(node);});
+  return [...new Map(found.map(bone=>[bone.uuid,bone])).values()];
 }
 function updateBoneMarkers() {
-  if (!currentModel) return;
+  if (!boneDots.size) return;
   const markerCamera = cameraMode ? activeCamera : camera;
   markerCamera.updateMatrixWorld();
-  currentModel.updateMatrixWorld(true);
+  for(const root of objects)if(root.userData?.kind==='Modelo')root.updateMatrixWorld(true);
   const worldPosition = new THREE.Vector3();
   const height = Math.max(1, container.clientHeight);
   for (const [bone, marker] of boneDots) {
@@ -985,8 +997,7 @@ function refreshGizmoEmissive() {
   });
 }
 function makeBoneMarkers(model) {
-  for (const marker of boneDots.values()){scene.remove(marker);marker.material?.dispose?.();}
-  boneDots.clear();
+  for(const [bone,marker] of [...boneDots])if(model===bone||model.getObjectById(bone.id)){scene.remove(marker);marker.material?.dispose?.();boneDots.delete(bone);}
   model.updateMatrixWorld(true);
   const bones = [];
   model.traverse((node) => { if (node.isBone) bones.push(node); });
@@ -1005,82 +1016,28 @@ function makeBoneMarkers(model) {
   updateBoneMarkers();
 }
 function selectBone(bone) {
+  let root=bone;while(root.parent&&!objects.includes(root))root=root.parent;if(root.userData?.kind==='Modelo')currentModel=root;
   if (importedAnimationAction) stopImportedClipPreservingPose();
   boneTarget = bone;
-  activeAnimationTarget = bone;
+  activeAnimationTarget = bone;animationTrackIds.add(bone.uuid);
   window.editorGizmo?.attach(bone);
   const endRole=boneRole(bone.name);window.editorGizmo?.setMode(['hand','foot','head'].includes(endRole)?'translate':(activeTool === 'select' ? 'rotate' : activeTool));
   $('#timelineTrackName').textContent = bone.name || 'Bone';
   if (!animationMode) toggleAnimationMode();
-  rebuildTimeline();
+  rebuildTimeline();refreshAnimationNodePicker();renderAnimationTrackList();
   document.querySelectorAll('.anim-track').forEach((track) => track.classList.toggle('selected', track.dataset.uuid === bone.uuid));
   refreshBoneList();
   updateBoneMarkers();
 }
-function makeAnimTrack(node, title) {
-  const track = document.createElement('div');
-  track.className = 'anim-track';
-  track.dataset.uuid = node.uuid;
-  track.innerHTML = `<span class="track-label"></span>`;
-  track.querySelector('.track-label').textContent = title;
-  track.addEventListener('pointerdown', (event) => {
-    if (event.target.closest('.key-dot')) return;
-    activeAnimationTarget = node;
-    if (node.isBone) selectBone(node);
-    else {
-      selected = node;
-      $('#timelineTrackName').textContent = node.name;
-      window.editorGizmo?.attach(node);
-      window.editorGizmo?.setMode('translate');
-      document.querySelectorAll('.anim-track').forEach((item) => item.classList.toggle('selected', item === track));
-    }
-    if (event.offsetX > track.clientWidth * 0.2) {
-      const bounds = track.getBoundingClientRect();
-      setFrame(Math.round(THREE.MathUtils.clamp((event.clientX - bounds.left) / bounds.width, 0, 1) * 120));
-    }
-  });
-  $('#timelineRuler').append(track);
-}
-function rebuildTimeline() {
-  const ruler = $('#timelineRuler');
-  ruler.replaceChildren();
-  const cursor = document.createElement('i');
-  cursor.id = 'timelineCursor';
-  ruler.append(cursor);
-  for (const frame of [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]) {
-    const tick = document.createElement('span');
-    tick.className = 'ruler-tick';
-    tick.style.left = `${frame / 120 * 100}%`;
-    tick.textContent = String(frame);
-    ruler.append(tick);
-  }
-  const animatedIds = new Set();
-  for (const pose of keyframes.values()) for (const uuid of pose.keys()) animatedIds.add(uuid);
-  const target = activeAnimationTarget || boneTarget || selected;
-  const trackTargets = new Map();
-  for (const node of [...objects, ...allBones()]) if (animatedIds.has(node.uuid)) trackTargets.set(node.uuid, node);
-  if (target) trackTargets.set(target.uuid, target);
-  if (!trackTargets.size && !currentModel && objects.length) trackTargets.set(objects[0].uuid, objects[0]);
-  for (const node of trackTargets.values()) makeAnimTrack(node, node.name || (node.isBone ? 'Hueso' : 'Objeto'));
-  updateKeyMarkers();
-  updateFrameControls();
-}
-function updateKeyMarkers() {
-  document.querySelectorAll('.anim-track').forEach((track) => {
-    track.querySelectorAll('.key-dot').forEach((marker) => marker.remove());
-    for (const [frame, pose] of keyframes) {
-      if (!pose.has(track.dataset.uuid)) continue;
-      const marker = document.createElement('button');
-      marker.type = 'button';
-      marker.className = 'key-dot';
-      marker.style.left = `${(frame / 120) * 100}%`;
-      marker.title = `Ir al fotograma ${frame}`;
-      marker.setAttribute('aria-label', `Keyframe ${frame}`);
-      marker.addEventListener('click', (event) => { event.stopPropagation(); setFrame(frame); });
-      track.append(marker);
-    }
-  });
-}
+function getAnimatableNodes(){const nodes=[];for(const root of objects){nodes.push(root);root.traverse?.(node=>{if(node!==root&&node.isObject3D&&!node.userData?.helper)nodes.push(node);});}return [...new Map(nodes.map(node=>[node.uuid,node])).values()].slice(0,800);}
+function getAnimationNodeLabel(node){let root=node;while(root.parent&&!objects.includes(root))root=root.parent;const owner=root.name||root.userData?.kind||'Objeto';if(node.isBone)return `Hueso · ${node.name||'sin nombre'}`;if(node.isCamera)return `Cámara · ${node.name}`;if(node.isLight)return `${node.userData?.kind||'Luz'} · ${node.name}`;if(node===root)return `${node.userData?.kind||'Objeto'} · ${node.name}`;return `${owner} / ${node.name||node.type}`;}
+function refreshAnimationNodePicker(){const picker=$('#animationNodePicker');if(!picker)return;const old=picker.value;picker.replaceChildren(new Option('Elegir objeto, cámara, luz o hueso…',''));for(const node of getAnimatableNodes()){const option=new Option(getAnimationNodeLabel(node),node.uuid);picker.append(option);}if([...picker.options].some(option=>option.value===old))picker.value=old;}
+function renderAnimationTrackList(){const panel=$('#animationTrackList');if(!panel)return;panel.replaceChildren();const nodes=getAnimatableNodes().filter(node=>animationTrackIds.has(node.uuid));for(const node of nodes){const row=document.createElement('div');row.className=`animation-track-row${node===activeAnimationTarget?' active':''}`;const pick=document.createElement('button');pick.type='button';pick.className='track-select';pick.textContent=getAnimationNodeLabel(node);pick.title=pick.textContent;pick.addEventListener('click',()=>{activeAnimationTarget=node;if(node.isBone){selectBone(node);return;}boneTarget=null;let root=node;while(root.parent&&!objects.includes(root))root=root.parent;selected=node;window.editorGizmo?.attach(node);window.editorGizmo?.setMode(node.isCamera||node.isLight?'rotate':'translate');$('#timelineTrackName').textContent=getAnimationNodeLabel(node);renderAnimationTrackList();refreshList();renderProperties();});const remove=document.createElement('button');remove.type='button';remove.className='track-remove';remove.textContent='×';remove.title='Quitar pista';remove.addEventListener('click',()=>removeAnimationTrack(node));row.append(pick,remove);panel.append(row);}}
+function addAnimationTrack(node){if(!node){toast('Elige un objeto o nodo de escena');return;}if(importedAnimationAction)stopImportedClipPreservingPose();animationMode=true;document.body.classList.add('animating');$('#animationPanel').hidden=false;$('#animationTimeline').hidden=false;animationTrackIds.add(node.uuid);activeAnimationTarget=node;if(node.isBone)boneTarget=node;else{boneTarget=null;let root=node;while(root.parent&&!objects.includes(root))root=root.parent;selected=node;window.editorGizmo?.attach(node);}refreshAnimationNodePicker();renderAnimationTrackList();rebuildTimeline();$('#timelineTrackName').textContent=getAnimationNodeLabel(node);scheduleProjectSave();toast(`Pista añadida · ${getAnimationNodeLabel(node)}`);}
+function removeAnimationTrack(node){animationTrackIds.delete(node.uuid);for(const pose of keyframes.values())pose.delete(node.uuid);if(activeAnimationTarget===node)activeAnimationTarget=null;animationTrackCache=null;animationNodesCache=null;renderAnimationTrackList();rebuildTimeline();recordHistory();scheduleProjectSave();}
+function makeAnimTrack(node,title){const track=document.createElement('div');track.className=`anim-track${node===activeAnimationTarget?' selected':''}`;track.dataset.uuid=node.uuid;const label=document.createElement('span');label.className='track-label';label.textContent=title;label.title=title;track.append(label);track.addEventListener('pointerdown',event=>{if(event.target.closest('.key-dot'))return;activeAnimationTarget=node;if(node.isBone){selectBone(node);}else{boneTarget=null;let root=node;while(root.parent&&!objects.includes(root))root=root.parent;selected=node;window.editorGizmo?.attach(node);window.editorGizmo?.setMode(node.isCamera||node.isLight?'rotate':'translate');$('#timelineTrackName').textContent=getAnimationNodeLabel(node);renderAnimationTrackList();refreshList();renderProperties();}const bounds=track.getBoundingClientRect();if(event.clientX>bounds.left+56)setFrame(Math.round(THREE.MathUtils.clamp((event.clientX-bounds.left-56)/Math.max(1,bounds.width-56),0,1)*120));});$('#timelineRuler').append(track);}
+function rebuildTimeline(){const ruler=$('#timelineRuler');ruler.replaceChildren();const cursor=document.createElement('i');cursor.id='timelineCursor';ruler.append(cursor);for(const frame of [0,10,20,30,40,50,60,70,80,90,100,110,120]){const tick=document.createElement('span');tick.className='ruler-tick';tick.style.left=`${frame/120*100}%`;tick.textContent=String(frame);ruler.append(tick);}const nodes=new Map(getAnimatableNodes().map(node=>[node.uuid,node]));for(const pose of keyframes.values())for(const uuid of pose.keys())if(nodes.has(uuid))animationTrackIds.add(uuid);const target=activeAnimationTarget||boneTarget||selected;if(target)animationTrackIds.add(target.uuid);for(const uuid of animationTrackIds){const node=nodes.get(uuid);if(node)makeAnimTrack(node,getAnimationNodeLabel(node));}updateKeyMarkers();updateFrameControls();renderAnimationTrackList();}
+function updateKeyMarkers(){document.querySelectorAll('.anim-track').forEach(track=>{track.querySelectorAll('.key-dot').forEach(marker=>marker.remove());for(const [frame,pose] of keyframes){if(!pose.has(track.dataset.uuid))continue;const marker=document.createElement('button');marker.type='button';marker.className='key-dot';marker.style.left=`${frame/120*100}%`;marker.title=`Fotograma ${frame} · toca para ir, mantén para eliminar`;marker.setAttribute('aria-label',`Keyframe ${frame}`);marker.addEventListener('click',event=>{event.stopPropagation();setFrame(frame);});marker.addEventListener('contextmenu',event=>{event.preventDefault();event.stopPropagation();pose.delete(track.dataset.uuid);if(!pose.size)keyframes.delete(frame);animationTrackCache=null;animationNodesCache=null;rebuildTimeline();recordHistory();scheduleProjectSave();toast('Keyframe eliminado');});let holdTimer;marker.addEventListener('pointerdown',event=>{holdTimer=setTimeout(()=>{pose.delete(track.dataset.uuid);if(!pose.size)keyframes.delete(frame);animationTrackCache=null;animationNodesCache=null;rebuildTimeline();recordHistory();scheduleProjectSave();toast('Keyframe eliminado');},650);});for(const type of ['pointerup','pointercancel','pointerleave'])marker.addEventListener(type,()=>clearTimeout(holdTimer));track.append(marker);}});}
 function refreshBoneList() {
   const panel = $('#boneList');
   if (!panel) return;
@@ -1111,10 +1068,11 @@ function toggleAnimationMode() {
     if (currentModel && !boneTarget) boneTarget = allBones()[0] || null;
     activeAnimationTarget = boneTarget || selected;
     if (boneTarget) { window.editorGizmo?.attach(boneTarget); window.editorGizmo?.setMode(['hand','foot','head'].includes(boneRole(boneTarget.name))?'translate':'rotate'); }
-    rebuildTimeline();
+    if(!boneTarget&&selected){activeAnimationTarget=selected;animationTrackIds.add(selected.uuid);}
+    refreshAnimationNodePicker();rebuildTimeline();
     if (currentModel) refreshBoneList();
     updateBoneMarkers();
-    hint.textContent = 'Modo animación · manipula el hueso y agrega keyframes';
+    hint.textContent = boneTarget?'Modo animación · manipula el hueso y agrega keyframes':'Modo animación · selecciona objetos, luces o cámaras y agrega keyframes';
   } else {
     boneTarget = null;
     if (selected && activeTool !== 'select') { window.editorGizmo?.attach(selected); window.editorGizmo?.setMode(activeTool); }
@@ -1135,7 +1093,13 @@ function readTransform(node) {
   return {
     position: vectorValues(node?.position, [0, 0, 0], 3),
     quaternion: vectorValues(node?.quaternion, [0, 0, 0, 1], 4),
-    scale: vectorValues(node?.scale, [1, 1, 1], 3)
+    scale: vectorValues(node?.scale, [1, 1, 1], 3),
+    intensity: Number.isFinite(node?.intensity)?node.intensity:null,
+    fov: Number.isFinite(node?.fov)?node.fov:null,
+    color: node?.color?.isColor?`#${node.color.getHexString()}`:null,
+    distance:Number.isFinite(node?.distance)?node.distance:null,
+    angle:Number.isFinite(node?.angle)?node.angle:null,
+    penumbra:Number.isFinite(node?.penumbra)?node.penumbra:null
   };
 }
 function writeTransform(node, state) {
@@ -1144,17 +1108,25 @@ function writeTransform(node, state) {
   node.position.fromArray(safe.position);
   node.quaternion.fromArray(safe.quaternion).normalize();
   node.scale.fromArray(safe.scale);
+  if(safe.intensity!==null&&'intensity' in node)node.intensity=safe.intensity;
+  if(safe.fov!==null&&node.isCamera){node.fov=safe.fov;node.updateProjectionMatrix();node.userData.helper?.update?.();}
+  if(safe.color&&node.color?.isColor)node.color.set(safe.color);
+  if(safe.distance!==null&&'distance' in node)node.distance=safe.distance;
+  if(safe.angle!==null&&'angle' in node)node.angle=safe.angle;
+  if(safe.penumbra!==null&&'penumbra' in node)node.penumbra=safe.penumbra;
+  if(node.isLight||node.isCamera)node.userData.helper?.update?.();
 }
-function captureKeyframe() {
+function captureKeyframe(onlyTarget=null) {
   const inputFrame = Number($('#frameNumber').value);
   const frame = Math.max(0, Math.min(120, Number.isFinite(inputFrame) ? inputFrame : currentFrame));
   currentFrame = frame;
-  const target = activeAnimationTarget || boneTarget || selected;
-  if (!target) { toast('Selecciona un objeto o hueso'); return; }
+  const target = onlyTarget||activeAnimationTarget||boneTarget||selected;
+  if (!target) { toast('Selecciona un objeto, una luz, una cámara o un hueso'); return; }
+  if(onlyTarget)animationTrackIds.add(onlyTarget.uuid);else if(target)animationTrackIds.add(target.uuid);
   const pose = keyframes.get(frame) || new Map();
-  currentModel?.updateMatrixWorld(true);
-  for(const object of objects)pose.set(object.uuid,readTransform(object));
-  for(const bone of allBones())pose.set(bone.uuid,readTransform(bone));
+  const nodes=getAnimatableNodes();
+  const captureIds=onlyTarget?new Set([onlyTarget.uuid]):animationTrackIds;
+  for(const node of nodes)if(captureIds.has(node.uuid))pose.set(node.uuid,readTransform(node));
   keyframes.set(frame, pose);animationTrackCache=null;animationNodesCache=null;
   scheduleProjectSave();recordHistory();rebuildTimeline();
   updateFrameControls();
@@ -1170,25 +1142,29 @@ function updateFrameControls() {
   $('#frameNumber').value = String(currentFrame);
   const cursor = $('#timelineCursor');
   if (cursor) cursor.style.left = `${(currentFrame / 120) * 100}%`;
-  updateKeyMarkers();
 }
 function buildAnimationTrackCache(){
   const tracks=new Map();
   for(const [frame,pose] of keyframes){for(const [uuid,transform] of pose){if(!tracks.has(uuid))tracks.set(uuid,[]);tracks.get(uuid).push([frame,transform]);}}
   for(const list of tracks.values())list.sort((a,b)=>a[0]-b[0]);
-  animationTrackCache=tracks;animationNodesCache=new Map([...objects,...allBones()].map(node=>[node.uuid,node]));return tracks;
+  animationTrackCache=tracks;animationNodesCache=new Map(getAnimatableNodes().map(node=>[node.uuid,node]));return tracks;
 }
 function interpolatePose(frame) {
   const tracks=animationTrackCache||buildAnimationTrackCache();
-  const nodes=animationNodesCache||(animationNodesCache=new Map([...objects,...allBones()].map(node=>[node.uuid,node])));
+  const nodes=animationNodesCache||(animationNodesCache=new Map(getAnimatableNodes().map(node=>[node.uuid,node])));
   for(const [uuid,available] of tracks){
     const node=nodes.get(uuid);if(!node||available.length<2)continue;
     let lo=0,hi=available.length;while(lo<hi){const mid=(lo+hi)>>1;if(available[mid][0]<frame)lo=mid+1;else hi=mid;}
     const afterIndex=lo,before=available[Math.max(0,afterIndex-1)],after=available[Math.min(available.length-1,afterIndex)];
-    const [f0,start]=before,[f1,end]=after;const t=f0===f1?0:THREE.MathUtils.clamp((frame-f0)/(f1-f0),0,1);
+    const [f0,start]=before,[f1,end]=after;let t=f0===f1?0:THREE.MathUtils.clamp((frame-f0)/(f1-f0),0,1);if(animationInterpolation==='smooth')t=t*t*(3-2*t);else if(animationInterpolation==='step')t=f0===f1||frame<f1?0:1;
     node.position.fromArray(start.position).lerp(new THREE.Vector3(...end.position),t);
     node.scale.fromArray(start.scale).lerp(new THREE.Vector3(...end.scale),t);
     node.quaternion.fromArray(start.quaternion).slerp(new THREE.Quaternion(...end.quaternion),t).normalize();
+    if(Number.isFinite(start.intensity)&&Number.isFinite(end.intensity)&&'intensity' in node)node.intensity=THREE.MathUtils.lerp(start.intensity,end.intensity,t);
+    if(Number.isFinite(start.fov)&&Number.isFinite(end.fov)&&node.isCamera){node.fov=THREE.MathUtils.lerp(start.fov,end.fov,t);node.updateProjectionMatrix();}
+    if(start.color&&end.color&&node.color?.isColor)node.color.set(start.color).lerp(new THREE.Color(end.color),t);
+    for(const key of ['distance','angle','penumbra'])if(Number.isFinite(start[key])&&Number.isFinite(end[key])&&key in node)node[key]=THREE.MathUtils.lerp(start[key],end[key],t);
+    if(node.isLight||node.isCamera)node.userData.helper?.update?.();
   }
   currentModel?.updateMatrixWorld(true);if(performance.now()-(window._lastMarkerUpdate||0)>45){updateBoneMarkers();window._lastMarkerUpdate=performance.now();}
 }
@@ -1198,6 +1174,7 @@ function setFrame(frame) {
   updateFrameControls();
 }
 function togglePlayback() {
+  if(importedAnimationAction){stopImportedClipPreservingPose();}
   isPlaying = !isPlaying;$('#playAnimation').textContent=isPlaying?'❚❚':'▶';clearInterval(playTimer);
   if(isPlaying)playTimer=setInterval(()=>{if(document.visibilityState==='hidden'||renderCaptureActive)return;const step=120/Math.max(1,(Number($('#renderDuration').value)||5)*24);if(currentFrame>=120){if(!animationLoop){isPlaying=false;$('#playAnimation').textContent='▶';clearInterval(playTimer);return;}currentFrame=0;}else currentFrame=Math.min(120,currentFrame+step);interpolatePose(currentFrame);updateFrameControls();},1000/24);
 }
@@ -1262,7 +1239,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     else if (activeTool === 'select') {
       const hits = raycaster.intersectObjects(objects, true);
       const hit = hits[0]?.object;
-      if (hit) { let target = hit; while (target && !objects.includes(target)) target = target.parent; if (target) { selected = target; activeAnimationTarget = target; boneTarget=null;window.editorGizmo?.attach(target); window.editorGizmo?.setMode('translate'); $('#timelineTrackName').textContent = target.name; rebuildTimeline(); } }
+      if (hit) { const target=hit;select(target);window.editorGizmo?.attach(target);window.editorGizmo?.setMode('translate'); }
     }
     return;
   }
@@ -1329,24 +1306,23 @@ $('#addKeyframe').addEventListener('click', () => {
   if (!animationMode) { animationMode = true; document.body.classList.add('animating'); $('#animationPanel').hidden = false; $('#animationTimeline').hidden = false; $('#animMode').innerHTML = 'Animation <span>⌄</span>'; }
   if (!activeAnimationTarget) activeAnimationTarget = boneTarget || selected;
   if (!activeAnimationTarget && currentModel) { boneTarget = allBones()[0] || null; activeAnimationTarget = boneTarget; }
+  if(activeAnimationTarget)animationTrackIds.add(activeAnimationTarget.uuid);
   rebuildTimeline();
   captureKeyframe();
 });
 $('#playAnimation').addEventListener('click', togglePlayback);
+$('#animationNodePicker').addEventListener('focus',refreshAnimationNodePicker);
 $('#animationLoop').addEventListener('change',event=>{animationLoop=event.target.checked;scheduleProjectSave();toast(animationLoop?'Ciclo de animación activado':'Ciclo de animación detenido');});
 $('#frameRange').addEventListener('input', (event) => setFrame(event.target.value));
 $('#frameNumber').addEventListener('change', (event) => setFrame(event.target.value));
 $('#prevFrame').addEventListener('click', () => setFrame(currentFrame - 1));
 $('#nextFrame').addEventListener('click', () => setFrame(currentFrame + 1));
-$('#addBoneTrack').addEventListener('click', () => {
-  const bones = allBones();
-  if (!bones.length) { toast('Importa primero un GLB con esqueleto'); return; }
-  if (!boneTarget) boneTarget = bones[0];
-  window.editorGizmo?.attach(boneTarget);
-  window.editorGizmo?.setMode('rotate');
-  refreshBoneList();
-  toast(`Pista de hueso: ${boneTarget.name || 'Hueso'}`);
-});
+$('#addAnimationTrack').addEventListener('click',()=>{const node=getAnimatableNodes().find(item=>item.uuid===$('#animationNodePicker').value);addAnimationTrack(node);});
+$('#autoKeyToggle').addEventListener('change',event=>{autoKeyEnabled=event.target.checked;toast(autoKeyEnabled?'Auto Key activado':'Auto Key desactivado');});
+$('#animationInterpolation').addEventListener('change',event=>{animationInterpolation=event.target.value;animationTrackCache=null;saveCurrentProject();toast(`Interpolación ${event.target.selectedOptions[0].text}`);});
+$('#deleteKeyframe').addEventListener('click',()=>{const pose=keyframes.get(currentFrame);if(!pose){toast('No hay claves en este fotograma');return;}for(const uuid of animationTrackIds)pose.delete(uuid);if(!pose.size)keyframes.delete(currentFrame);animationTrackCache=null;animationNodesCache=null;rebuildTimeline();recordHistory();scheduleProjectSave();toast(`Claves del fotograma ${currentFrame} eliminadas`);});
+$('#copyKeyframe').addEventListener('click',()=>{const pose=keyframes.get(currentFrame);if(!pose?.size){toast('No hay claves en este fotograma');return;}copiedKeyframe=new Map([...pose].filter(([uuid])=>animationTrackIds.has(uuid)));toast(`Copiadas ${copiedKeyframe.size} pistas`);});
+$('#pasteKeyframe').addEventListener('click',()=>{if(!copiedKeyframe?.size){toast('Primero copia un fotograma con claves');return;}const pose=keyframes.get(currentFrame)||new Map();for(const [uuid,value] of copiedKeyframe){pose.set(uuid,JSON.parse(JSON.stringify(value)));animationTrackIds.add(uuid);}keyframes.set(currentFrame,pose);animationTrackCache=null;animationNodesCache=null;rebuildTimeline();recordHistory();scheduleProjectSave();toast('Claves pegadas en el fotograma actual');});
 function applyPostLook(name) {
   const look = name === 'warm' ? {contrast:1.22,saturation:1.08,warmth:0.075,vignette:0.27,grain:0.003,bloom:0.08} : (name === 'neutral' ? {contrast:1.04,saturation:1,warmth:0.005,vignette:0.08,grain:0,bloom:0.04} : {contrast:1.08,saturation:0.98,warmth:0.015,vignette:0.15,grain:0.002,bloom:0.06});
   const u=lightPostPass.uniforms;u.contrast.value=look.contrast;u.saturation.value=look.saturation;u.warmth.value=look.warmth;u.vignette.value=look.vignette;u.grain.value=look.grain;bloomPass.strength=look.bloom;bloomPass.threshold=1.15;bloomPass.radius=0.025;
