@@ -48,7 +48,7 @@ public class RenderExportPlugin extends Plugin {{
   private static final String PREFS = "editor3d_render_export";
   private static final String TREE_KEY = "tree_uri";
   private static final String PROJECT_TREE_KEY = "project_tree_uri";
-  private MediaCodec videoEncoder; private MediaMuxer videoMuxer; private File videoTemp; private int videoFrame, videoWidth, videoHeight, videoFps; private int videoTrack = -1; private int videoColorFormat; private boolean videoMuxerStarted = false;
+  private static MediaCodec videoEncoder; private static MediaMuxer videoMuxer; private static File videoTemp; private static int videoFrame, videoWidth, videoHeight, videoFps; private static int videoTrack = -1; private static int videoColorFormat; private static boolean videoMuxerStarted = false;
 
   @PluginMethod
   public void chooseFolder(PluginCall call) {{
@@ -170,18 +170,26 @@ public class RenderExportPlugin extends Plugin {{
   @PluginMethod
   public void startVideo(PluginCall call) {{
     try {{
-      videoWidth=call.getInt("width",1280); videoHeight=call.getInt("height",720); videoFps=call.getInt("fps",24);
+      if(videoEncoder!=null||videoMuxer!=null) cleanupVideo();
+      videoWidth=call.getInt("width",640); videoHeight=call.getInt("height",360); videoFps=call.getInt("fps",24);
+      if(videoWidth>1280||videoHeight>720)throw new IllegalArgumentException("Resolución móvil máxima para video: 1280×720");
       if ((videoWidth&1)!=0 || (videoHeight&1)!=0) throw new IllegalArgumentException("MP4 width/height must be even");
       videoFrame=0; videoTrack=-1; videoMuxerStarted=false;
       videoTemp=new File(getContext().getCacheDir(),"editor-render-"+System.currentTimeMillis()+".mp4");
       videoMuxer=new MediaMuxer(videoTemp.getAbsolutePath(),MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
       MediaFormat fmt=MediaFormat.createVideoFormat("video/avc",videoWidth,videoHeight);
       videoColorFormat=chooseYuvColorFormat(); fmt.setInteger(MediaFormat.KEY_COLOR_FORMAT,videoColorFormat);
-      fmt.setInteger(MediaFormat.KEY_BIT_RATE,Math.min(18000000,Math.max(2000000,videoWidth*videoHeight*5)));
+      fmt.setInteger(MediaFormat.KEY_BIT_RATE,Math.min(8000000,Math.max(1200000,videoWidth*videoHeight*3))); fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE,videoWidth*videoHeight*3/2);
       fmt.setInteger(MediaFormat.KEY_FRAME_RATE,videoFps); fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL,2);
-      videoEncoder=MediaCodec.createEncoderByType("video/avc"); videoEncoder.configure(fmt,null,null,MediaCodec.CONFIGURE_FLAG_ENCODE); videoEncoder.start(); call.resolve();
+      videoEncoder=MediaCodec.createEncoderByType("video/avc"); videoEncoder.configure(fmt,null,null,MediaCodec.CONFIGURE_FLAG_ENCODE); videoEncoder.start(); JSObject ready=new JSObject();ready.put("ready",true);ready.put("width",videoWidth);ready.put("height",videoHeight);ready.put("fps",videoFps);call.resolve(ready);
     }} catch(Exception e) {{ cleanupVideo(); call.reject("No se pudo iniciar codificador MP4: "+e.getMessage(),e); }}
   }}
+  @PluginMethod
+  public void abortVideo(PluginCall call) {{ cleanupVideo(); JSObject ret=new JSObject();ret.put("aborted",true);call.resolve(ret); }}
+
+  @PluginMethod
+  public void abortVideo(PluginCall call) {{ cleanupVideo(); JSObject ret=new JSObject();ret.put("aborted",true);call.resolve(ret); }}
+
   @PluginMethod
   public void addVideoFrame(PluginCall call) {{
     try {{
@@ -191,8 +199,8 @@ public class RenderExportPlugin extends Plugin {{
       Bitmap scaled=(bmp.getWidth()==videoWidth&&bmp.getHeight()==videoHeight)?bmp:Bitmap.createScaledBitmap(bmp,videoWidth,videoHeight,true);
       int[] pixels=new int[videoWidth*videoHeight]; scaled.getPixels(pixels,0,videoWidth,0,0,videoWidth,videoHeight);
       if(scaled!=bmp) scaled.recycle(); bmp.recycle(); byte[] yuv=argbToYuv420(pixels,videoWidth,videoHeight,videoColorFormat); Arrays.fill(pixels,0);
-      int input=videoEncoder.dequeueInputBuffer(10000); if(input<0) throw new IllegalStateException("Codificador H.264 ocupado");
-      ByteBuffer in=videoEncoder.getInputBuffer(input); if(in==null||in.capacity()<yuv.length) throw new IllegalStateException("Buffer de video insuficiente");
+      int input=videoEncoder.dequeueInputBuffer(20000); if(input<0) throw new IllegalStateException("Codificador H.264 ocupado esperando buffer de entrada");
+      ByteBuffer in=videoEncoder.getInputBuffer(input); if(in==null||in.capacity()<yuv.length) throw new IllegalStateException("Buffer del codificador insuficiente ("+(in==null?0:in.capacity())+" < "+yuv.length+" bytes); reduce la resolución del render");
       in.clear(); in.put(yuv); videoEncoder.queueInputBuffer(input,0,yuv.length,(long)videoFrame*1000000L/videoFps,0); videoFrame++; drainVideo(false); call.resolve();
     }} catch(Exception e) {{ call.reject("Error al codificar cuadro MP4: "+e.getMessage(),e); }}
   }}
@@ -224,7 +232,7 @@ public class RenderExportPlugin extends Plugin {{
     throw new IllegalStateException("Este Android no ofrece un codificador H.264 con entrada YUV420");
   }}
   private byte[] argbToYuv420(int[] p,int w,int h,int colorFormat) {{ int ySize=w*h,u=ySize,v=ySize+ySize/4; boolean semi=(colorFormat==MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar); byte[] out=new byte[ySize+ySize/2]; for(int row=0;row<h;row++)for(int col=0;col<w;col++){{int c=p[row*w+col],r=(c>>16)&255,g=(c>>8)&255,b=c&255;out[row*w+col]=(byte)Math.max(0,Math.min(255,((66*r+129*g+25*b+128)>>8)+16));if((row&1)==0&&(col&1)==0){{byte ub=(byte)Math.max(0,Math.min(255,((-38*r-74*g+112*b+128)>>8)+128));byte vb=(byte)Math.max(0,Math.min(255,((112*r-94*g-18*b+128)>>8)+128));if(semi){{out[u++]=ub;out[u++]=vb;}}else{{out[u++]=ub;out[v++]=vb;}}}}}}return out; }}
-  private void cleanupVideo() {{ try{{if(videoEncoder!=null){{videoEncoder.stop();videoEncoder.release();}}}}catch(Exception ignored){{}} try{{if(videoMuxer!=null){{videoMuxer.stop();videoMuxer.release();}}}}catch(Exception ignored){{}} if(videoTemp!=null)videoTemp.delete();videoEncoder=null;videoMuxer=null;videoTemp=null;videoMuxerStarted=false; }}
+  private static void cleanupVideo() {{ try{{if(videoEncoder!=null){{videoEncoder.stop();videoEncoder.release();}}}}catch(Exception ignored){{}} try{{if(videoMuxer!=null){{videoMuxer.stop();videoMuxer.release();}}}}catch(Exception ignored){{}} if(videoTemp!=null)videoTemp.delete();videoEncoder=null;videoMuxer=null;videoTemp=null;videoMuxerStarted=false; }}
 
   private String queryName(Uri uri) {{
     try (Cursor cursor = getContext().getContentResolver().query(uri, new String[]{{DocumentsContract.Document.COLUMN_DISPLAY_NAME}}, null, null, null)) {{
