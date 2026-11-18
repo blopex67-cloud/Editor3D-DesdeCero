@@ -533,13 +533,22 @@ function snapshot() {
 }
 function projectList() { try { return JSON.parse(localStorage.getItem('editor3d:projects') || '[]'); } catch { return []; } }
 function writeProjectList(items) { localStorage.setItem('editor3d:projects', JSON.stringify(items)); }
+let historyTimer=null;
+function refreshHistoryButtons(){const undo=$('#undo'),redo=$('#redo');if(undo)undo.disabled=historyUndo.length<2;if(redo)redo.disabled=historyRedo.length===0;}
+function recordHistory(){if(restoringHistory||!currentProjectId)return;clearTimeout(historyTimer);historyTimer=null;const data=JSON.stringify(snapshot());if(historyUndo.at(-1)===data)return;historyUndo.push(data);if(historyUndo.length>60)historyUndo.shift();historyRedo.length=0;historyStamp=Date.now();refreshHistoryButtons();}
+function recordHistorySoon(){if(restoringHistory||!currentProjectId)return;clearTimeout(historyTimer);historyTimer=setTimeout(recordHistory,180);}
+async function applyHistorySnapshot(data){if(!data)return;restoringHistory=true;try{await loadScene(JSON.parse(data));}finally{restoringHistory=false;refreshHistoryButtons();}}
+async function undoScene(){clearTimeout(historyTimer);recordHistory();if(historyUndo.length<2){toast('No hay más cambios para deshacer');return;}const current=historyUndo.pop();historyRedo.push(current);await applyHistorySnapshot(historyUndo.at(-1));toast('Cambio deshecho');}
+async function redoScene(){clearTimeout(historyTimer);if(!historyRedo.length){toast('No hay cambios para rehacer');return;}const next=historyRedo.pop();historyUndo.push(next);await applyHistorySnapshot(next);toast('Cambio rehecho');}
 let projectSaveTimer = null;
-function scheduleProjectSave() { clearTimeout(projectSaveTimer); projectSaveTimer = setTimeout(saveCurrentProject, 350); }
+let historyUndo=[];let historyRedo=[];let historyStamp=0;let restoringHistory=false;
+function scheduleProjectSave() { recordHistorySoon(); clearTimeout(projectSaveTimer); projectSaveTimer = setTimeout(saveCurrentProject, 350); }
 function saveCurrentProject() {
   if (loadingProjectScene || !currentProjectId) return;
   const projects = projectList();
   const project = projects.find((item) => item.id === currentProjectId);
   if (!project) return;
+  recordHistorySoon();
   project.scene = snapshot(); project.updatedAt = Date.now();
   writeProjectList(projects); renderProjectCards();scheduleDocumentsBackup();
 }
@@ -1129,7 +1138,7 @@ function captureKeyframe() {
   if(target.isBone){currentModel?.updateMatrixWorld(true);for(const bone of allBones())pose.set(bone.uuid,readTransform(bone));}
   else pose.set(target.uuid, readTransform(target));
   keyframes.set(frame, pose);
-  scheduleProjectSave();rebuildTimeline();
+  scheduleProjectSave();recordHistory();rebuildTimeline();
   updateFrameControls();
   toast(`Keyframe de ${target.name || 'objeto'} · fotograma ${frame}`);
 }
@@ -1300,7 +1309,8 @@ $('#projectFileInput').addEventListener('change',async e=>{const file=e.target.f
 fileInput.addEventListener('change', () => { importFile(fileInput.files?.[0]); fileInput.value = ''; });
 $('#gridToggle').addEventListener('click', () => { gridVisible = !gridVisible; grid.visible = gridVisible; });
 $('#frame').addEventListener('click', () => { orbit.target.set(0, 0.6, 0); camera.position.set(5, 4, 7); orbit.update(); });
-$('#undo').addEventListener('click', () => toast('Deshacer todavía no está disponible'));
+$('#undo').addEventListener('click', undoScene);
+$('#redo').addEventListener('click', redoScene);
 $('#animMode').addEventListener('click', toggleAnimationMode);
 $('#assetsToggle').addEventListener('click', () => { $('#assetsPanel').hidden = !$('#assetsPanel').hidden; });
 $('#assetsClose').addEventListener('click', () => { $('#assetsPanel').hidden = true; });
