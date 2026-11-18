@@ -521,7 +521,7 @@ function renderProperties() {
     <div class="section-label">ESCALA</div>${field('X', 0, s.x, 'scale')}${field('Y', 1, s.y, 'scale')}${field('Z', 2, s.z, 'scale')}`;
   const nameInput=$('#objectName');nameInput.value=selected.name;
   nameInput.addEventListener('change',()=>{selected.name=safeName(nameInput.value);refreshList();saveCurrentProject();});
-  $('#cameraAspect')?.addEventListener('change',e=>{updateCameraAspect(selected,e.target.value);scheduleProjectSave();});$('#cameraAspect').value=selected.userData.aspectMode||'16:9';
+  const cameraAspectControl=$('#cameraAspect');cameraAspectControl?.addEventListener('change',e=>{updateCameraAspect(selected,e.target.value);scheduleProjectSave();});if(cameraAspectControl)cameraAspectControl.value=selected.userData.aspectMode||'16:9';
   $('#selectedCameraView')?.addEventListener('click', () => enterCameraView(selected));
   $('#alignCameraView')?.addEventListener('click',()=>{selected.position.copy(camera.position);selected.quaternion.copy(camera.quaternion);selected.up.set(0,1,0);selected.lookAt(orbit.target);selected.updateProjectionMatrix();selected.userData.helper?.update();scheduleProjectSave();toast('Cámara alineada con la vista del editor');});
   const lightChanged=()=>{lightingBaked=false;selected.userData.helper?.update?.();scheduleProjectSave();};
