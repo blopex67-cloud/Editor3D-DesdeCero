@@ -85,3 +85,7 @@
 
 .material-panel .material-color-control small{grid-column:1/-1;}
 .material-panel .emission-toggle{display:flex;align-items:center;gap:8px}.material-panel .emission-toggle input{width:22px;height:22px;accent-color:#5bdcff}.material-panel .noise-shader-setting{margin:4px 0}.material-panel #materialNoiseControls{margin:5px 0 9px;padding:6px;border:1px solid #424a50;border-radius:4px;background:#191c20}.material-panel #materialNoiseControls[hidden]{display:none!important}.material-panel #materialNoiseControls>label{display:grid;grid-template-columns:1fr 1.1fr;align-items:center;gap:6px;margin:7px 0}.material-panel #materialNoiseControls small{line-height:1.4}
+
+.render-feature-list{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:8px 0;padding:6px;border:1px solid #42484e;border-radius:4px;background:#181a1d}.render-feature-list label{display:flex;align-items:center;gap:5px;font-size:8px;color:#d1d8dc}.render-feature-list input{width:15px;height:15px;accent-color:#62d4f1}.material-panel .emission-toggle{display:flex!important;grid-template-columns:1fr auto!important}.material-panel .emission-toggle input{width:18px!important;height:18px;justify-self:end}
+
+.render-feature-list>small{grid-column:1/-1;color:#9fa8af;font-size:7px;line-height:1.35}.material-panel .render-note{display:block!important;margin:6px 0;font-size:7px!important}
