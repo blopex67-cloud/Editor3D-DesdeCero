@@ -84,3 +84,4 @@
 
 
 .material-panel .material-color-control small{grid-column:1/-1;}
+.material-panel .emission-toggle{display:flex;align-items:center;gap:8px}.material-panel .emission-toggle input{width:22px;height:22px;accent-color:#5bdcff}.material-panel .noise-shader-setting{margin:4px 0}.material-panel #materialNoiseControls{margin:5px 0 9px;padding:6px;border:1px solid #424a50;border-radius:4px;background:#191c20}.material-panel #materialNoiseControls[hidden]{display:none!important}.material-panel #materialNoiseControls>label{display:grid;grid-template-columns:1fr 1.1fr;align-items:center;gap:6px;margin:7px 0}.material-panel #materialNoiseControls small{line-height:1.4}
