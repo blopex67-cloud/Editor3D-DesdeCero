@@ -2,6 +2,11 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -106,9 +111,14 @@ try {
   orbit.minDistance = 1.6;
   orbit.maxDistance = 40;
   const gizmo = new TransformControls(camera, renderer.domElement);
+  orbit.addEventListener('start',()=>beginInteractiveMotion());
+  orbit.addEventListener('end',()=>endInteractiveMotion());
+  renderer.domElement.addEventListener('pointerdown',()=>beginInteractiveMotion(),{passive:true});
+  renderer.domElement.addEventListener('pointerup',()=>endInteractiveMotion(),{passive:true});
+  renderer.domElement.addEventListener('pointercancel',()=>endInteractiveMotion(),{passive:true});
   scene.add(gizmo.getHelper());
   gizmo.setSize(1.18);
-  gizmo.addEventListener('dragging-changed', (event) => { orbit.enabled = !event.value;if(event.value&&gizmo.object?.isBone)beginIkDrag(gizmo.object);else if(!event.value&&ikDragState){solveIkDrag();scheduleProjectSave();ikDragState=null;}if(!event.value&&animationMode&&autoKeyEnabled&&gizmo.object)captureKeyframe(gizmo.object); });
+  gizmo.addEventListener('dragging-changed', (event) => { event.value?beginInteractiveMotion():endInteractiveMotion();orbit.enabled = !event.value;if(event.value&&gizmo.object?.isBone)beginIkDrag(gizmo.object);else if(!event.value&&ikDragState){solveIkDrag();scheduleProjectSave();ikDragState=null;}if(!event.value&&animationMode&&autoKeyEnabled&&gizmo.object)captureKeyframe(gizmo.object); });
   gizmo.addEventListener('change', () => updateBoneMarkers());
   // Keep Three.js axis handles functional, with distinct high-visibility neon RGB colors.
   gizmo.setColors('#ff1744', '#39ff14', '#00b7ff', '#fff200');
@@ -172,6 +182,7 @@ const pendingModelImports = new Set();
 const pendingAssetMigrations = new Set();
 let emissiveBloomActive = false;
 let renderCaptureActive=false;
+let interactiveMotion=false;let idleQualityBoost=false;let adaptiveQualityTimer=0;let adaptiveQualityStep=0;let glContextAvailable=true;let adaptiveBaseRatio=Math.min(window.devicePixelRatio||1,1.25);
 let realisticMode=true;let savedEnvironment=scene.environment;let savedExposure=renderer.toneMappingExposure;
 let animationTrackCache=null;let animationNodesCache=null;
 let sharedBoneMarkerGeometry=null;
@@ -345,7 +356,7 @@ function field(label, axis, value, kind) {
 function materialTargetsFor(object) { const result=[]; if(object?.isMesh)result.push(object); else object?.traverse?.(node=>{if(node.isMesh)result.push(node);}); return result; }
 function materialListFor(mesh) { return (Array.isArray(mesh?.material)?mesh.material:[mesh?.material]).filter(Boolean); }
 function hasEmissiveMeshes(){return objects.some(object=>{let found=false;object.traverse?.(node=>{if(node.isMesh&&materialListFor(node).some(mat=>mat.emissive&&mat.emissiveIntensity>0))found=true;});return found;});}
-function usePostPipeline(){const enabled=realisticMode&&(postEnabled||emissiveBloomActive);bloomPass.enabled=enabled&&(postEnabled||emissiveBloomActive);lightPostPass.enabled=realisticMode&&postEnabled;return enabled;}
+function usePostPipeline(){const enabled=realisticMode&&(postEnabled||emissiveBloomActive||idleQualityBoost);bloomPass.enabled=enabled&&(postEnabled||emissiveBloomActive||idleQualityBoost);lightPostPass.enabled=realisticMode&&(postEnabled||idleQualityBoost);return enabled;}
 function applyTextureShader(material, mode) {
   material.userData ||= {}; material.userData.editorShader=mode; material.wireframe=mode==='wire';
   const key=`editor-style-${mode}`; material.customProgramCacheKey=()=>key;
@@ -885,29 +896,19 @@ function addLoadedModel(gltf,fileName='Modelo GLB'){
   const modelSave=persistModelAsset(model,importedClips);pendingModelImports.add(modelSave);modelSave.then(()=>{saveCurrentProject();toast('GLB guardado con sus materiales y animaciones');}).catch(error=>{console.error(error);toast(`Modelo visible, pero no se pudo conservar completo: ${error.message||error}`);}).finally(()=>pendingModelImports.delete(modelSave));
   importedMixer=importedClips.length?new THREE.AnimationMixer(model):null;if(importedMixer)addImportedClipControls(importedClips,importedMixer);emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();rebuildTimeline();updateStatus();toast(`GLB importado · ${model.name} · ${allBones().length} huesos`);saveCurrentProject();
 }
-function importGlbBuffer(buffer,fileName='Modelo.glb'){
-  const array=buffer instanceof ArrayBuffer?buffer:buffer.buffer.slice(buffer.byteOffset,buffer.byteOffset+buffer.byteLength);
-  new GLTFLoader().parse(array,'',(gltf)=>{try{addLoadedModel(gltf,fileName);}catch(error){console.error(error);toast(`GLB leído, pero no se pudo añadir: ${error.message||error}`);}},error=>{console.error(error);toast(`No se pudo leer el GLB: ${error.message||error}`);});
-}
+function parseGltfBytes(bytes,fileName){const array=bytes instanceof ArrayBuffer?bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);new GLTFLoader().parse(array,'',(gltf)=>{try{addLoadedModel(gltf,fileName);}catch(error){console.error(error);toast(`No se pudo añadir ${fileName}: ${error.message||error}`);}},error=>{console.error(error);toast(`No se pudo leer ${fileName}: ${error.message||error}`);});}
+function addImportedRoot(root,fileName,clips=[]){if(!root)throw new Error('El archivo no contiene un nodo 3D');const name=safeName(String(fileName||'Modelo').replace(/\.(glb|gltf|fbx|obj|stl|ply|prisma)$/i,''));root.name=name;root.userData.kind='Modelo';root.traverse(node=>{if(node.isMesh){node.castShadow=true;node.receiveShadow=true;for(const mat of materialListFor(node))mat.needsUpdate=true;}});if(importedAnimationAction){importedAnimationAction.stop();importedAnimationAction=null;}root.userData.assetKey=`model-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;scene.add(root);objects.push(root);animationNodesCache=null;currentModel=root;boneTarget=null;select(root);makeBoneMarkers(root);importedClips=clips||[];const save=persistModelAsset(root,importedClips);pendingModelImports.add(save);save.then(()=>{saveCurrentProject();toast('Modelo y materiales guardados en el proyecto');}).catch(error=>{console.error(error);toast(`Modelo importado, pero no se pudo conservar: ${error.message||error}`);}).finally(()=>pendingModelImports.delete(save));importedMixer=importedClips.length?new THREE.AnimationMixer(root):null;if(importedMixer)addImportedClipControls(importedClips,importedMixer);emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();rebuildTimeline();updateStatus();toast(`Modelo importado · ${name} · escala y posición originales conservadas`);saveCurrentProject();}
+function addLoadedModel(gltf,fileName='Modelo GLB'){const root=gltf.scene||gltf.scenes?.[0];addImportedRoot(root,fileName,gltf.animations||[]);}
+function fileBuffer(file){return file.arrayBuffer();}
+function buildAssetManager(files){const urls=new Map();for(const file of files)urls.set(file.name.toLowerCase(),URL.createObjectURL(file));const manager=new THREE.LoadingManager();manager.setURLModifier(url=>{const clean=decodeURIComponent(url.split(/[?#]/)[0]).split('/').pop().toLowerCase();return urls.get(clean)||url;});return{manager,urls,dispose:()=>{for(const url of urls.values())URL.revokeObjectURL(url);}};}
+async function importModelFiles(fileList){const files=[...fileList];if(!files.length)return;const file=files.find(f=>/\.(glb|gltf|fbx|obj|stl|ply|prisma)$/i.test(f.name));if(!file){const project=files.find(f=>/\.(json|editor3d)$/i.test(f.name));if(project){await importFile(project);return;}throw new Error('Selecciona GLB, GLTF, FBX, OBJ, STL, PLY o un proyecto JSON.');}const ext=file.name.split('.').pop().toLowerCase();lightingBaked=false;$('#status').textContent=`Importando ${file.name}…`;const bundle=buildAssetManager(files);try{const bytes=await fileBuffer(file);if(ext==='glb'){const loader=new GLTFLoader(bundle.manager);await new Promise((resolve,reject)=>{const url=bundle.urls.get(file.name.toLowerCase());loader.load(url,gltf=>{try{addLoadedModel(gltf,file.name);resolve();}catch(e){reject(e);}},event=>{if(event.total)$('#status').textContent=`Leyendo ${file.name} · ${Math.round(event.loaded/event.total*100)}%`;},reject);});return;}if(ext==='gltf'){const loader=new GLTFLoader(bundle.manager),json=await file.text();await new Promise((resolve,reject)=>loader.parse(json,'',(gltf)=>{try{addLoadedModel(gltf,file.name);resolve();}catch(e){reject(e);}},reject));return;}if(ext==='fbx'){const array=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),root=new FBXLoader(bundle.manager).parse(array,'');addImportedRoot(root,file.name,root.animations||[]);return;}if(ext==='obj'){const mtl=files.find(f=>f.name.toLowerCase().endsWith('.mtl'));let loader=new OBJLoader(bundle.manager);if(mtl){const manager=new MTLLoader(bundle.manager);const materials=manager.parse(await mtl.text(),'');materials.preload();loader.setMaterials(materials);}const root=loader.parse(await file.text());addImportedRoot(root,file.name,[]);return;}if(ext==='stl'||ext==='ply'){const array=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),geometry=ext==='stl'?new STLLoader(bundle.manager).parse(array):new PLYLoader(bundle.manager).parse(array);if(!geometry.attributes.normal)geometry.computeVertexNormals();const material=new THREE.MeshStandardMaterial({color:'#b9bec4',roughness:.62,metalness:.04});const mesh=new THREE.Mesh(geometry,material);mesh.name=file.name.replace(/\.(stl|ply)$/i,'');const root=new THREE.Group();root.add(mesh);addImportedRoot(root,file.name,[]);return;}if(ext==='prisma'){const text=new TextDecoder().decode(bytes);try{const data=JSON.parse(text);if(data?.format==='editor-3d-scene'){await importProjectData(data,file.name);return;}if(data?.metadata?.type==='Object'){addImportedRoot(new THREE.ObjectLoader().parse(data),file.name,[]);return;}}catch(_){}throw new Error('Este archivo .prisma no parece un proyecto JSON/Three.js compatible. Exporta desde Prisma como GLB/GLTF para conservar mallas, materiales y transformaciones.');}}finally{bundle.dispose();$('#status').textContent='Listo';}}
+function importGlbBuffer(buffer,fileName='Modelo.glb'){parseGltfBytes(buffer,fileName);}
 async function importProjectData(data,fileName='Proyecto'){
   if(data?.format!=='editor-3d-scene'||!Array.isArray(data.objects))throw new Error('El archivo no parece un proyecto de Editor 3D.');
   const name=safeName(data.projectName||fileName.replace(/\.editor3d\.json$|\.json$/i,''));const item={id:`p-${Date.now()}`,name,createdAt:Date.now(),updatedAt:Date.now(),scene:data};const projects=projectList();projects.unshift(item);writeProjectList(projects);renderProjectCards();currentProjectId=item.id;localStorage.setItem('editor3d:last-project',item.id);$('#projectHome').hidden=true;$('#app').hidden=false;await loadScene(data);$('#home').title=name;toast(`Proyecto importado: ${name}`);
 }
-async function importPickedFile(name,base64){
-  const binary=atob(base64),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
-  if(/\.glb$/i.test(name)||(bytes.length>4&&bytes[0]===0x67&&bytes[1]===0x6c&&bytes[2]===0x54&&bytes[3]===0x46)){importGlbBuffer(bytes,name);return;}
-  const text=new TextDecoder().decode(bytes);const data=JSON.parse(text);if(data?.format==='editor-3d-scene')await importProjectData(data,name);else await loadScene(data);
-}
-function importFile(file) {
-  if (!file) return;
-  lightingBaked=false;
-  if (file.name.toLowerCase().endsWith('.json')) {
-    file.text().then((text) => loadScene(JSON.parse(text))).catch((error) => toast(error.message || 'No se pudo abrir la escena'));
-    return;
-  }
-  if(!/\.(glb|gltf)$/i.test(file.name)){toast('Formato no compatible: usa un archivo .glb, .gltf o proyecto .json');return;}
-  const url=URL.createObjectURL(file);new GLTFLoader().load(url,gltf=>{try{addLoadedModel(gltf,file.name);}catch(error){console.error(error);toast(`No se pudo importar el modelo: ${error.message||error}`);}finally{URL.revokeObjectURL(url);}},event=>{if(event.total)$('#status').textContent=`Leyendo modelo ${Math.round(event.loaded/event.total*100)}%`;},error=>{URL.revokeObjectURL(url);console.error(error);toast(`No se pudo importar el modelo: ${error.message||error}`);});
-}
+async function importPickedFile(name,base64){const binary=atob(base64),bytes=Uint8Array.from(binary,c=>c.charCodeAt(0)),ext=String(name).split('.').pop().toLowerCase();if(ext==='json'||ext==='prisma'){const text=new TextDecoder().decode(bytes);let data;try{data=JSON.parse(text);}catch{throw new Error('No pude leer este proyecto; si es .prisma, expórtalo desde su app a GLB o GLTF.');}if(data?.format==='editor-3d-scene'){await importProjectData(data,name);return;}if(data?.metadata?.type==='Object'){addImportedRoot(new THREE.ObjectLoader().parse(data),name,[]);return;}if(Array.isArray(data?.objects)){await loadScene(data);return;}throw new Error('Proyecto JSON no compatible.');}if(ext==='glb'){parseGltfBytes(bytes,name);return;}if(ext==='gltf'){throw new Error('En Android usa GLB para modelos con texturas/archivos externos, o abre el .gltf junto con todos sus recursos desde el selector web.');}if(ext==='fbx'){const root=new FBXLoader().parse(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),'');addImportedRoot(root,name,root.animations||[]);return;}if(ext==='obj'){addImportedRoot(new OBJLoader().parse(new TextDecoder().decode(bytes)),name,[]);return;}if(ext==='stl'||ext==='ply'){const array=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),geometry=ext==='stl'?new STLLoader().parse(array):new PLYLoader().parse(array);if(!geometry.attributes.normal)geometry.computeVertexNormals();const root=new THREE.Group();root.add(new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({color:'#b9bec4',roughness:.62,metalness:.04})));addImportedRoot(root,name,[]);return;}throw new Error('Formato no compatible. Prueba GLB, GLTF, FBX, OBJ, STL, PLY o proyecto JSON.');}
+function importFile(file){if(!file)return;const ext=file.name.split('.').pop().toLowerCase();if(ext==='json'||ext==='editor3d'){file.text().then(async text=>{const data=JSON.parse(text);if(data?.format==='editor-3d-scene')await importProjectData(data,file.name);else if(data?.metadata?.type==='Object')addImportedRoot(new THREE.ObjectLoader().parse(data),file.name,[]);else if(Array.isArray(data?.objects))await loadScene(data);else throw new Error('Proyecto JSON no compatible');}).catch(error=>toast(error.message||'No se pudo abrir el proyecto'));return;}importModelFiles([file]).catch(error=>{console.error(error);toast(`No se pudo importar: ${error.message||error}`);});}
 function exportGlb() {
   const root = new THREE.Group();
   for (const object of objects) root.add(object.clone());
@@ -1105,6 +1106,7 @@ function readTransform(node) {
 function writeTransform(node, state) {
   if (!node || !state) return;
   const safe = readTransform({ position: state.position, quaternion: state.quaternion, scale: state.scale });
+  for(const key of ['intensity','fov','color','distance','angle','penumbra'])if(state[key]!==undefined)safe[key]=state[key];
   node.position.fromArray(safe.position);
   node.quaternion.fromArray(safe.quaternion).normalize();
   node.scale.fromArray(safe.scale);
@@ -1292,7 +1294,7 @@ $('#exportScene').addEventListener('click', exportGlb);
 $('#importScene').addEventListener('click', async () => {if(Capacitor.isNativePlatform()){try{const file=await NativeRenderExport.readProjectFile();await importPickedFile(file.name,file.data);}catch(error){if(!String(error?.message||error).includes('canceled'))toast(`No se pudo abrir el archivo: ${error.message||error}`);}return;}fileInput.click();});
 $('#importProjectHome').addEventListener('click',async()=>{if(Capacitor.isNativePlatform()){try{const file=await NativeRenderExport.readProjectFile();const raw=atob(file.data);const bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));await importProjectData(JSON.parse(new TextDecoder().decode(bytes)),file.name);}catch(error){if(!String(error?.message||error).includes('canceled'))toast(`No se pudo importar el proyecto: ${error.message||error}`);}return;}$('#projectFileInput').click();});
 $('#projectFileInput').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;try{await importProjectData(JSON.parse(await file.text()),file.name);}catch(error){toast(`No se pudo importar el proyecto: ${error.message||error}`);}finally{e.target.value='';}});
-fileInput.addEventListener('change', () => { importFile(fileInput.files?.[0]); fileInput.value = ''; });
+fileInput.addEventListener('change',()=>{const files=[...fileInput.files];if(files.length>1||/\.(gltf|fbx|obj|stl|ply|prisma)$/i.test(files[0]?.name||''))importModelFiles(files).catch(error=>{console.error(error);toast(`No se pudo importar: ${error.message||error}`);});else importFile(files[0]);fileInput.value='';});
 $('#gridToggle').addEventListener('click', () => { gridVisible = !gridVisible; grid.visible = gridVisible; });
 $('#frame').addEventListener('click', () => { orbit.target.set(0, 0.6, 0); camera.position.set(5, 4, 7); orbit.update(); });
 $('#undo').addEventListener('click', undoScene);
@@ -1352,17 +1354,22 @@ document.querySelectorAll('[data-tool]').forEach((button) => button.addEventList
 resize();
 renderProjectCards();
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){saveCurrentProject();if(pendingTextureImports.size)Promise.allSettled([...pendingTextureImports]).then(saveCurrentProject);}});window.addEventListener('pagehide',()=>saveCurrentProject());navigator.storage?.persist?.().catch(()=>{});
+function beginInteractiveMotion(){interactiveMotion=true;idleQualityBoost=false;adaptiveQualityStep=0;clearTimeout(adaptiveQualityTimer);try{const rect=container.getBoundingClientRect();adaptiveBaseRatio=Math.min(window.devicePixelRatio||1,1.25);const motionRatio=Math.max(.55,Math.min(.72,adaptiveBaseRatio*.62));renderer.setPixelRatio(motionRatio);renderer.setSize(rect.width,rect.height,false);composer.setPixelRatio(motionRatio);composer.setSize(rect.width,rect.height);}catch(error){console.warn('Adaptive preview fallback',error);}}
+function estimateSceneComplexity(){let vertices=0;for(const root of objects)root.traverse?.(node=>{if(node.isMesh)vertices+=node.geometry?.attributes?.position?.count||0;});return vertices;}
+function restingPixelRatio(){const rect=container.getBoundingClientRect(),area=Math.max(1,rect.width*rect.height),gpuBudget=1800000,complexity=estimateSceneComplexity(),complexityScale=complexity>1800000?.68:complexity>900000?.78:complexity>400000?.9:1;return Math.max(.55,Math.min(adaptiveBaseRatio,1.25,Math.sqrt(gpuBudget/area),adaptiveBaseRatio*complexityScale));}
+function endInteractiveMotion(){interactiveMotion=false;clearTimeout(adaptiveQualityTimer);adaptiveQualityTimer=setTimeout(()=>{if(interactiveMotion||document.visibilityState==='hidden'||isPlaying||importedAnimationAction)return;try{const rect=container.getBoundingClientRect(),target=restingPixelRatio(),steps=[.78,.9,1];const ratio=Math.min(target,steps[Math.min(adaptiveQualityStep++,steps.length-1)]*Math.min(window.devicePixelRatio||1,1.25));renderer.setPixelRatio(ratio);renderer.setSize(rect.width,rect.height,false);composer.setPixelRatio(ratio);composer.setSize(rect.width,rect.height);if(ratio+0.005<target){adaptiveQualityTimer=setTimeout(endInteractiveMotion,120);}else idleQualityBoost=realisticMode;}catch(error){idleQualityBoost=false;console.warn('High-quality idle mode skipped to protect device',error);}},550);}
+renderer.domElement.addEventListener('webglcontextlost',event=>{event.preventDefault();glContextAvailable=false;idleQualityBoost=false;interactiveMotion=true;clearTimeout(adaptiveQualityTimer);toast('La escena es pesada para el dispositivo; reduje la calidad para evitar el cierre.');});
+renderer.domElement.addEventListener('webglcontextrestored',()=>{glContextAvailable=true;interactiveMotion=false;endInteractiveMotion();});
 let lastRenderTimestamp=0;
 function frame(timestamp=0) {
   requestAnimationFrame(frame);
   if(document.visibilityState==='hidden'||renderCaptureActive||$('#app').hidden)return;
   if(timestamp-lastRenderTimestamp<33)return;
   orbit.update();
-  if(lightPostPass.enabled)lightPostPass.uniforms.time.value += 0.016;
-  if (importedMixer && importedAnimationAction) importedMixer.update(delta);
   const delta=Math.min(0.05,Math.max(0,(timestamp-lastRenderTimestamp)/1000||1/30));lastRenderTimestamp=timestamp;
-  if (document.visibilityState==='hidden'||renderCaptureActive) return;
-  if (usePostPipeline()) { sceneRenderPass.camera = cameraMode ? activeCamera : camera; composer.render(); }
-  else renderer.render(scene, cameraMode ? activeCamera : camera);
+  if (importedMixer && importedAnimationAction) importedMixer.update(delta);
+  if (document.visibilityState==='hidden'||renderCaptureActive||!glContextAvailable) return;
+  if(lightPostPass.enabled)lightPostPass.uniforms.time.value += delta;
+  try{if (usePostPipeline()) { sceneRenderPass.camera = cameraMode ? activeCamera : camera; composer.render(); }else renderer.render(scene, cameraMode ? activeCamera : camera);}catch(error){idleQualityBoost=false;postEnabled=false;bloomPass.enabled=false;lightPostPass.enabled=false;try{renderer.setPixelRatio(.55);renderer.render(scene,cameraMode?activeCamera:camera);}catch(_){console.error('WebGL render failure',error);}console.warn('Render downgraded after GPU error',error);}
 }
 frame();
