@@ -1,6 +1,6 @@
 {
   "appId": "com.zapia.editor3d",
-  "appName": "Software Volumi3d",
+  "appName": "Volumi3d",
   "webDir": "dist",
   "server": {
     "androidScheme": "https"
