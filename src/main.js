@@ -955,7 +955,7 @@ async function importProjectData(data,fileName='Proyecto'){
   if(data?.format!=='editor-3d-scene'||!Array.isArray(data.objects))throw new Error('El archivo no parece un proyecto de Editor 3D.');
   const name=safeName(data.projectName||fileName.replace(/\.editor3d\.json$|\.json$/i,''));const item={id:`p-${Date.now()}`,name,createdAt:Date.now(),updatedAt:Date.now(),scene:data};const projects=projectList();projects.unshift(item);writeProjectList(projects);renderProjectCards();currentProjectId=item.id;localStorage.setItem('editor3d:last-project',item.id);$('#projectHome').hidden=true;$('#app').hidden=false;await loadScene(data);$('#home').title=name;toast(`Proyecto importado: ${name}`);
 }
-import { decode as decodeMessagePack } from '@msgpack/msgpack';
+
 function prismaProps(component){const out={};for(const entry of component?.[1]||[]){if(!Array.isArray(entry)||!entry.length)continue;let value=entry[1];if(typeof value==='string'){try{value=JSON.parse(value)}catch{}}out[entry[0]]=value;}return out;}
 function prismaComponent(record,name){return(record?.[2]||[]).find(item=>item?.[0]===name);}
 function prismaVec(value,fallback){if(Array.isArray(value))return[0,1,2].map(i=>Number.isFinite(Number(value[i]))?Number(value[i]):fallback[i]);if(value&&typeof value==='object')return['x','y','z'].map((k,i)=>Number.isFinite(Number(value[k]))?Number(value[k]):fallback[i]);return fallback;}
