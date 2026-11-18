@@ -8,6 +8,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality } from 'mediabunny';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 const NativeRenderExport = registerPlugin('RenderExport');
@@ -35,6 +36,14 @@ let animationLoop = true;
 let importedMixer = null;
 let importedClips = [];
 let importedAnimationAction = null;
+let ikDragState = null;
+const IK_FK_MAP = {
+  'head':['hips','pelvis','spine','spine_01','spine_02','spine_03','neck','neck_01','head'],
+  'arm_l':['clavicle_l','shoulder_l','upperarm_l','upper_arm_l','arm_l','lowerarm_l','lower_arm_l','forearm_l','hand_l','wrist_l'],
+  'arm_r':['clavicle_r','shoulder_r','upperarm_r','upper_arm_r','arm_r','lowerarm_r','lower_arm_r','forearm_r','hand_r','wrist_r'],
+  'leg_l':['hips','pelvis','thigh_l','upperleg_l','upper_leg_l','leg_l','calf_l','lowerleg_l','lower_leg_l','shin_l','foot_l','ankle_l','ball_l'],
+  'leg_r':['hips','pelvis','thigh_r','upperleg_r','upper_leg_r','leg_r','calf_r','lowerleg_r','lower_leg_r','shin_r','foot_r','ankle_r','ball_r']
+};
 let activeCamera = camera;
 let viewCameraObject = null;
 let cameraMode = false;
@@ -95,7 +104,7 @@ try {
   const gizmo = new TransformControls(camera, renderer.domElement);
   scene.add(gizmo.getHelper());
   gizmo.setSize(1.18);
-  gizmo.addEventListener('dragging-changed', (event) => { orbit.enabled = !event.value; });
+  gizmo.addEventListener('dragging-changed', (event) => { orbit.enabled = !event.value;if(event.value&&gizmo.object?.isBone)beginIkDrag(gizmo.object);else if(!event.value&&ikDragState){solveIkDrag();scheduleProjectSave();ikDragState=null;} });
   gizmo.addEventListener('change', () => updateBoneMarkers());
   // Keep Three.js axis handles functional, with distinct high-visibility neon RGB colors.
   gizmo.setColors('#ff1744', '#39ff14', '#00b7ff', '#fff200');
@@ -108,7 +117,7 @@ try {
     }
     node.renderOrder = 999;
   });
-  gizmo.addEventListener('objectChange', () => { lightingBaked=false; if(gizmo.object?.isObject3D)markReflectionDirty(); renderProperties(); updateBoneMarkers(); if (gizmo.object?.userData.helper) gizmo.object.userData.helper.update(); scheduleProjectSave(); });
+  gizmo.addEventListener('objectChange', () => { if(gizmo.object?.isBone&&ikDragState)solveIkDrag();lightingBaked=false; if(gizmo.object?.isObject3D&&!gizmo.object.isBone)markReflectionDirty(); renderProperties(); updateBoneMarkers(); if (gizmo.object?.userData.helper) gizmo.object.userData.helper.update(); scheduleProjectSave(); });
   window.editorGizmo = gizmo;
 } catch (error) {
   console.error('Editor 3D startup error:', error);
@@ -129,6 +138,12 @@ ground.rotation.x = -Math.PI / 2;
 ground.position.y = -0.025;
 ground.receiveShadow = true;
 scene.add(ground);
+// Broad, neutral environment fill keeps PBR materials visible across the roughness range.
+const environmentGenerator=new THREE.PMREMGenerator(renderer);
+const environmentScene=new RoomEnvironment();
+scene.environment=environmentGenerator.fromScene(environmentScene,0.04).texture;
+scene.environmentIntensity=0.85;
+environmentGenerator.dispose();
 
 const composer = new EffectComposer(renderer);
 composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25)); // Lower-resolution post FX for mobile GPUs.
@@ -155,6 +170,7 @@ let reflectionStatusText = '';
 const wetSurfaces = new Map();
 const pendingTextureImports = new Set();
 const pendingModelImports = new Set();
+const pendingAssetMigrations = new Set();
 let emissiveBloomActive = false;
 function toast(message) {
   const element = $('#toast');
@@ -267,10 +283,37 @@ function select(object) {
   if(!$('#materialPanel').hidden) refreshMaterialPanel();
   refreshBoneList();
 }
+function roundedBoxGeometry(width,height,depth,radius,steps=4){
+  const shape=new THREE.Shape(),x=-width/2,y=-height/2,r=THREE.MathUtils.clamp(radius,0.001,Math.min(width,height,depth)*0.49);
+  shape.moveTo(x+r,y);shape.lineTo(x+width-r,y);shape.quadraticCurveTo(x+width,y,x+width,y+r);shape.lineTo(x+width,y+height-r);shape.quadraticCurveTo(x+width,y+height,x+width-r,y+height);shape.lineTo(x+r,y+height);shape.quadraticCurveTo(x,y+height,x,y+height-r);shape.lineTo(x,y+r);shape.quadraticCurveTo(x,y,x+r,y);
+  const geometry=new THREE.ExtrudeGeometry(shape,{depth:depth-2*r,bevelEnabled:true,bevelSegments:steps,steps:1,bevelSize:r,bevelThickness:r,curveSegments:8});geometry.translate(0,0,-(depth-2*r)/2);geometry.computeVertexNormals();return geometry;
+}
+function replaceMeshMaterials(mesh,mutate){const oldList=materialListFor(mesh);const next=oldList.map(old=>{const material=old.isMeshPhysicalMaterial?old:new THREE.MeshPhysicalMaterial({color:old.color?.clone?.()||new THREE.Color('#ffffff'),map:old.map||null,normalMap:old.normalMap||null,roughnessMap:old.roughnessMap||null,metalnessMap:old.metalnessMap||null,aoMap:old.aoMap||null,emissiveMap:old.emissiveMap||null,lightMap:old.lightMap||null,displacementMap:old.displacementMap||null,alphaTest:old.alphaTest,emissive:old.emissive?.clone?.()||new THREE.Color('#000000'),roughness:old.roughness??.55,metalness:old.metalness??0,side:old.side,vertexColors:old.vertexColors,transparent:old.transparent,opacity:old.opacity,alphaMap:old.alphaMap||null});material.name=old.name;material.userData={...old.userData};material.onBeforeCompile=old.onBeforeCompile;material.customProgramCacheKey=old.customProgramCacheKey;material.normalScale?.copy(old.normalScale||new THREE.Vector2(1,1));old.dispose();mutate(material);return material;});mesh.material=Array.isArray(mesh.material)?next:next[0];}
+function applyCubeFinish(){
+  const mesh=renderMaterialMesh?.isMesh?renderMaterialMesh:(selected?.isMesh?selected:null);if(!mesh){toast('Selecciona una malla o un objeto cúbico');return;}
+  const finish=$('#cubeFinish').value;
+  if(finish==='rounded'){
+    if(!mesh.geometry?.isBoxGeometry){toast('El cubo redondeado solo se aplica a una geometría de cubo');return;}
+    if(!mesh.userData.originalCubeGeometry){mesh.userData.originalCubeGeometry=mesh.geometry;}
+    mesh.geometry.computeBoundingBox();const size=mesh.geometry.boundingBox.getSize(new THREE.Vector3());
+    mesh.geometry=roundedBoxGeometry(Math.max(size.x,.05),Math.max(size.y,.05),Math.max(size.z,.05),Math.min(size.x,size.y,size.z)*.14,5);mesh.geometry.computeVertexNormals();mesh.userData.cubeFinish='rounded';
+  }else if(finish==='clear'){
+    if(mesh.userData.originalCubeGeometry){mesh.geometry.dispose();mesh.geometry=mesh.userData.originalCubeGeometry;delete mesh.userData.originalCubeGeometry;}mesh.userData.cubeFinish='clear';
+    for(const mat of materialListFor(mesh)){if(mat.userData.cubeOriginal){mat.color.copy(mat.userData.cubeOriginal.color);mat.roughness=mat.userData.cubeOriginal.roughness;mat.metalness=mat.userData.cubeOriginal.metalness;mat.transmission=mat.userData.cubeOriginal.transmission;mat.ior=mat.userData.cubeOriginal.ior;mat.thickness=mat.userData.cubeOriginal.thickness;mat.transparent=mat.userData.cubeOriginal.transparent;mat.opacity=mat.userData.cubeOriginal.opacity;mat.needsUpdate=true;delete mat.userData.cubeOriginal;}}
+  }else if(finish==='glass'){
+    replaceMeshMaterials(mesh,()=>{});for(const mat of materialListFor(mesh)){if(!mat.userData.cubeOriginal)mat.userData.cubeOriginal={color:mat.color?.clone?.()||new THREE.Color('#ffffff'),roughness:mat.roughness??.1,metalness:mat.metalness??0,transmission:mat.transmission??0,ior:mat.ior??1.5,thickness:mat.thickness??0,transparent:mat.transparent??false,opacity:mat.opacity??1};mat.color?.set('#2fcf93');mat.roughness=.08;mat.metalness=0;mat.transmission=.92;mat.ior=1.46;mat.thickness=.7;mat.transparent=true;mat.opacity=1;mat.envMapIntensity=1.4;mat.needsUpdate=true;}
+    mesh.userData.cubeFinish='glass';
+  }else{
+    replaceMeshMaterials(mesh,()=>{});for(const mat of materialListFor(mesh)){if(!mat.userData.cubeOriginal)mat.userData.cubeOriginal={color:mat.color?.clone?.()||new THREE.Color('#ffffff'),roughness:mat.roughness??.55,metalness:mat.metalness??0,transmission:mat.transmission??0,ior:mat.ior??1.5,thickness:mat.thickness??0,transparent:mat.transparent??false,opacity:mat.opacity??1};mat.color?.set('#f4f4f4');mat.roughness=.64;mat.metalness=.02;mat.transmission=0;mat.transparent=false;mat.opacity=1;mat.needsUpdate=true;}
+    mesh.userData.cubeFinish='studio';
+  }
+  mesh.geometry.computeVertexNormals();mesh.geometry.computeBoundingBox();mesh.geometry.computeBoundingSphere();lightingBaked=false;renderProperties();refreshMaterialPanel();scheduleProjectSave();toast(`Acabado aplicado: ${finish}`);
+}
 function addObject(kind = 'Cubo', position = [0, 0.65, 0], color = null) {
   lightingBaked=false;
   const geometry = kind === 'Esfera' ? new THREE.SphereGeometry(0.62, 24, 16)
     : kind === 'Plano' ? new THREE.PlaneGeometry(1.5, 1.5)
+    : kind === 'Cubo redondeado' ? roundedBoxGeometry(1.15,1.15,1.15,0.12,4)
     : new THREE.BoxGeometry(1.15, 1.15, 1.15);
   const material = new THREE.MeshStandardMaterial({
     color: color || (kind === 'Esfera' ? '#66c8ff' : '#e5e5e5'),
@@ -314,7 +357,7 @@ function refreshMaterialPanel() {
   const mats=materialListFor(renderMaterialMesh);const mat=mats[0];if(!mat)return;
   $('#materialTargetName').textContent=`${selected?.name||'Objeto'} · ${renderMaterialMesh.name||'Malla'}`;
   $('#materialColor').value=`#${mat.color?.getHexString?.()||'ffffff'}`;$('#baseTextureFile').value='';$('#roughnessTextureFile').value='';$('#normalTextureFile').value='';
-  $('#materialRoughness').value=String(mat.roughness??0.55);$('#roughnessValue').value=Number(mat.roughness??0.55).toFixed(2);
+  const safeRoughness=THREE.MathUtils.clamp(Number.isFinite(mat.roughness)?mat.roughness:0.55,0.12,0.94);mat.roughness=safeRoughness;$('#materialRoughness').min='0.12';$('#materialRoughness').max='0.94';$('#materialRoughness').value=String(safeRoughness);$('#roughnessValue').value=safeRoughness.toFixed(2);
   $('#materialMetalness').value=String(mat.metalness??0.05);$('#metalnessValue').value=Number(mat.metalness??0.05).toFixed(2);
   $('#materialEmissive').value=`#${mat.emissive?.getHexString?.()||'000000'}`;$('#materialEmissionPower').value=String(mat.emissiveIntensity||0);$('#emissionValue').value=Number(mat.emissiveIntensity||0).toFixed(2);
   $('#materialShader').value=mat.userData?.editorShader||'original';$('#wetFloor').textContent=wetSurfaces.has(renderMaterialMesh.uuid)||mat.userData?.wetSurface?'Quitar efecto mojado':'Aplicar efecto mojado al objeto';$('#normalStrength').value=String(mat.normalScale?.x??1);$('#normalStrengthValue').value=Number(mat.normalScale?.x??1).toFixed(2);
@@ -327,19 +370,22 @@ function importMaterialMap(file,inputId,mapKey,userDataKey,colorSpace){
   const sourceUrl=URL.createObjectURL(file);
   const task=(async()=>{
     try{
-      const texture=await new Promise((resolve,reject)=>new THREE.TextureLoader().load(sourceUrl,resolve,undefined,reject));
-      texture.colorSpace=colorSpace;texture.wrapS=texture.wrapT=THREE.RepeatWrapping;texture.generateMipmaps=true;texture.minFilter=THREE.LinearMipmapLinearFilter;texture.magFilter=THREE.LinearFilter;
-      for(const mat of targetMaterials){mat[mapKey]=texture;mat.userData ||= {};mat.needsUpdate=true;}
-      if(input)input.disabled=false;lightingBaked=false;emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();scheduleProjectSave();toast(`${inputId} aplicada; optimizando en segundo plano…`);
-      let bitmap;try{bitmap=await createImageBitmap(file);const maxSize=1536,scale=Math.min(1,maxSize/Math.max(bitmap.width,bitmap.height));const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(bitmap.width*scale));canvas.height=Math.max(1,Math.round(bitmap.height*scale));canvas.getContext('2d',{alpha:true}).drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();bitmap=null;const blob=await new Promise((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new Error('No se pudo procesar la textura')),mapKey==='map'?'image/webp':'image/png',mapKey==='map'?0.88:undefined));const key=`tex-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;await storeTextureAsset(key,blob);for(const mat of targetMaterials)mat.userData[userDataKey]=key;scheduleProjectSave();console.info(`Texture optimized ${canvas.width}x${canvas.height}`);}finally{if(bitmap)bitmap.close();}
+    const immediateKey=`tex-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+    const durableWrite=storeTextureAsset(immediateKey,file).then(()=>{for(const mat of targetMaterials){mat.userData ||= {};mat.userData[userDataKey]=immediateKey;}saveCurrentProject();});
+    const texture=await new Promise((resolve,reject)=>new THREE.TextureLoader().load(sourceUrl,resolve,undefined,reject));
+    texture.colorSpace=colorSpace;texture.wrapS=texture.wrapT=THREE.RepeatWrapping;texture.generateMipmaps=true;texture.minFilter=THREE.LinearMipmapLinearFilter;texture.magFilter=THREE.LinearFilter;
+    for(const mat of targetMaterials){mat[mapKey]=texture;mat.userData ||= {};mat.needsUpdate=true;}
+    await durableWrite;
+    if(input)input.disabled=false;lightingBaked=false;emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();scheduleProjectSave();toast(`${inputId} aplicada; optimizando en segundo plano…`);
+      let bitmap;try{bitmap=await createImageBitmap(file);const maxSize=1536,scale=Math.min(1,maxSize/Math.max(bitmap.width,bitmap.height));const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(bitmap.width*scale));canvas.height=Math.max(1,Math.round(bitmap.height*scale));canvas.getContext('2d',{alpha:true}).drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();bitmap=null;const blob=await new Promise((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new Error('No se pudo procesar la textura')),mapKey==='map'?'image/webp':'image/png',mapKey==='map'?0.88:undefined));const key=immediateKey;await storeTextureAsset(key,blob);for(const mat of targetMaterials)mat.userData[userDataKey]=key;saveCurrentProject();console.info(`Texture optimized ${canvas.width}x${canvas.height}`);}finally{if(bitmap)bitmap.close();}
     }catch(error){console.error(error);toast(`No se pudo importar ${inputId}: ${error.message||error}`);throw error;}
     finally{URL.revokeObjectURL(sourceUrl);if(input)input.disabled=false;}
   })();pendingTextureImports.add(task);task.finally(()=>pendingTextureImports.delete(task)).catch(()=>{});return task;
 }
 
 function wetSurfaceCount(){return wetSurfaces.size;}
-function reflectionStatus(message){const el=$('#reflectionStatus'),box=$('#reflectionIndicator');if(!el||!box)return;const value=message||'';if(value!==reflectionStatusText){el.textContent=value;reflectionStatusText=value;}box.hidden=!wetSurfaceCount();}
-function markReflectionDirty(){if(!wetSurfaceCount())return;reflectionDirty=true;clearTimeout(reflectionRefreshTimer);reflectionRefreshDue=performance.now()+5000;reflectionStatus('Objeto movido · reinicio en 5s');reflectionRefreshTimer=setTimeout(()=>refreshWetReflections(true),5000);}
+function reflectionStatus(message){const el=$('#reflectionStatus'),box=$('#reflectionIndicator');if(!el||!box)return;el.textContent='';box.hidden=!wetSurfaceCount();}
+function markReflectionDirty(){if(!wetSurfaceCount())return;reflectionDirty=true;clearTimeout(reflectionRefreshTimer);reflectionRefreshTimer=setTimeout(()=>refreshWetReflections(true),5000);}
 function scheduleInitialReflection(mesh){if(!wetSurfaces.has(mesh.uuid))return;reflectionDirty=true;refreshWetReflections(true);}
 function enableWetSurface(mesh, restoring=false){
   if(!mesh?.isMesh)return false;
@@ -384,19 +430,16 @@ function refreshWetReflections(force=false){
       const wasVisible=mesh.visible;mesh.visible=false;state.probe.position.copy(center);
       try{state.probe.update(renderer,scene);for(const mat of state.materials){mat.envMap=state.target.texture;mat.envMapIntensity=1.35;mat.needsUpdate=true;}}finally{mesh.visible=wasVisible;}
     }
-    reflectionDirty=false;reflectionRefreshDue=0;reflectionStatus('Reflejos listos · se actualizan al mover objetos');
+    reflectionDirty=false;reflectionRefreshDue=0;reflectionStatus('');
   }catch(error){console.warn('Dynamic reflection update failed',error);reflectionStatus('Reflejo · error al actualizar');}
   finally{reflectionBusy=false;}
 }
-function tickReflectionCounter(now){
-  if(!wetSurfaceCount()){reflectionStatus('');return;}
-  const remaining=Math.max(0,Math.ceil((reflectionRefreshDue-now)/1000));
-  if(reflectionDirty)reflectionStatus(`Objeto movido · reinicio del reflejo en ${remaining}s`);
-  else reflectionStatus('Reflejo listo · solo se reinicia al mover un objeto');
+function tickReflectionCounter(){
+  if(!wetSurfaceCount())reflectionStatus('');
 }
 function restoreWetSurfaces(){
   for(const object of objects)for(const mesh of materialTargetsFor(object))if(mesh.userData?.wetSurface||materialListFor(mesh).some(mat=>mat.userData?.wetSurface))enableWetSurface(mesh,true);
-  if(wetSurfaceCount()){reflectionDirty=false;reflectionRefreshDue=0;reflectionStatus('Reflejos listos · se actualizan al mover un objeto');}
+  if(wetSurfaceCount()){reflectionDirty=false;reflectionRefreshDue=0;reflectionStatus('');}
 }
 async function prepareRenderLighting(){
   if(lightingBakePromise)return lightingBakePromise;
@@ -487,7 +530,8 @@ function snapshot() {
     name: object.name, kind: object.userData.kind || 'Cubo', assetKey: object.userData.kind === 'Modelo' ? (object.userData.assetKey || null) : undefined, position: object.position.toArray(),
     rotation: object.rotation.toArray(), scale: object.scale.toArray(),
     color: `#${object.material?.color?.getHexString?.() || object.color?.getHexString?.() || 'ffffff'}`,
-    materials: (()=>{const rows=[];object.traverse?.(node=>{if(node.isMesh){const mats=Array.isArray(node.material)?node.material:[node.material];rows.push({nodeName:node.name,materials:mats.map(mat=>({color:mat.color?`#${mat.color.getHexString()}`:null,roughness:mat.roughness,metalness:mat.metalness,emissive:mat.emissive?`#${mat.emissive.getHexString()}`:null,emissiveIntensity:mat.emissiveIntensity,editorShader:mat.userData?.editorShader||'original',wetSurface:!!mat.userData?.wetSurface,wetOriginal:mat.userData?.wetOriginal||null,baseTextureKey:mat.userData?.baseTextureKey||null,roughnessTextureKey:mat.userData?.roughnessTextureKey||null,normalTextureKey:mat.userData?.normalTextureKey||null,normalScale:mat.normalScale?.toArray?.()||[1,1]}))});}});if(object.isMesh){const mats=Array.isArray(object.material)?object.material:[object.material];rows.push({nodeName:object.name,materials:mats.map(mat=>({color:mat.color?`#${mat.color.getHexString()}`:null,roughness:mat.roughness,metalness:mat.metalness,emissive:mat.emissive?`#${mat.emissive.getHexString()}`:null,emissiveIntensity:mat.emissiveIntensity,editorShader:mat.userData?.editorShader||'original',wetSurface:!!mat.userData?.wetSurface,wetOriginal:mat.userData?.wetOriginal||null,baseTextureKey:mat.userData?.baseTextureKey||null,roughnessTextureKey:mat.userData?.roughnessTextureKey||null,normalTextureKey:mat.userData?.normalTextureKey||null,normalScale:mat.normalScale?.toArray?.()||[1,1]}))});}return rows;})(),
+    geometryRecipe:object.userData.cubeFinish==='rounded'?{type:'roundedBox',size:object.userData.originalCubeGeometry? [object.userData.originalCubeGeometry.parameters.width,object.userData.originalCubeGeometry.parameters.height,object.userData.originalCubeGeometry.parameters.depth] : (object.geometry.boundingBox||new THREE.Box3().setFromObject(object)).getSize(new THREE.Vector3()).toArray(),radius:0.14}:null,cubeFinish:object.userData.cubeFinish||null,
+    materials: (()=>{const rows=[];object.traverse?.(node=>{if(node.isMesh){const mats=Array.isArray(node.material)?node.material:[node.material];rows.push({nodeName:node.name,materials:mats.map(mat=>({color:mat.color?`#${mat.color.getHexString()}`:null,roughness:mat.roughness,metalness:mat.metalness,emissive:mat.emissive?`#${mat.emissive.getHexString()}`:null,emissiveIntensity:mat.emissiveIntensity,transmission:mat.transmission,ior:mat.ior,thickness:mat.thickness,transparent:mat.transparent,opacity:mat.opacity,cubeOriginal:mat.userData?.cubeOriginal?{color:mat.userData.cubeOriginal.color?.getHexString?.()||'ffffff',roughness:mat.userData.cubeOriginal.roughness,metalness:mat.userData.cubeOriginal.metalness,transmission:mat.userData.cubeOriginal.transmission,ior:mat.userData.cubeOriginal.ior,thickness:mat.userData.cubeOriginal.thickness,transparent:mat.userData.cubeOriginal.transparent,opacity:mat.userData.cubeOriginal.opacity}:null,editorShader:mat.userData?.editorShader||'original',wetSurface:!!mat.userData?.wetSurface,wetOriginal:mat.userData?.wetOriginal||null,baseTextureKey:mat.userData?.baseTextureKey||null,roughnessTextureKey:mat.userData?.roughnessTextureKey||null,normalTextureKey:mat.userData?.normalTextureKey||null,normalScale:mat.normalScale?.toArray?.()||[1,1]}))});}});if(object.isMesh){const mats=Array.isArray(object.material)?object.material:[object.material];rows.push({nodeName:object.name,materials:mats.map(mat=>({color:mat.color?`#${mat.color.getHexString()}`:null,roughness:mat.roughness,metalness:mat.metalness,emissive:mat.emissive?`#${mat.emissive.getHexString()}`:null,emissiveIntensity:mat.emissiveIntensity,transmission:mat.transmission,ior:mat.ior,thickness:mat.thickness,transparent:mat.transparent,opacity:mat.opacity,cubeOriginal:mat.userData?.cubeOriginal?{color:mat.userData.cubeOriginal.color?.getHexString?.()||'ffffff',roughness:mat.userData.cubeOriginal.roughness,metalness:mat.userData.cubeOriginal.metalness,transmission:mat.userData.cubeOriginal.transmission,ior:mat.userData.cubeOriginal.ior,thickness:mat.userData.cubeOriginal.thickness,transparent:mat.userData.cubeOriginal.transparent,opacity:mat.userData.cubeOriginal.opacity}:null,editorShader:mat.userData?.editorShader||'original',wetSurface:!!mat.userData?.wetSurface,wetOriginal:mat.userData?.wetOriginal||null,baseTextureKey:mat.userData?.baseTextureKey||null,roughnessTextureKey:mat.userData?.roughnessTextureKey||null,normalTextureKey:mat.userData?.normalTextureKey||null,normalScale:mat.normalScale?.toArray?.()||[1,1]}))});}return rows;})(),
     intensity: object.intensity, lightColor:object.color?`#${object.color.getHexString()}`:null, distance: object.distance, angle: object.angle, penumbra: object.penumbra,
     fov: object.fov, near: object.near, far: object.far
   })) };
@@ -502,7 +546,7 @@ function saveCurrentProject() {
   const project = projects.find((item) => item.id === currentProjectId);
   if (!project) return;
   project.scene = snapshot(); project.updatedAt = Date.now();
-  writeProjectList(projects); renderProjectCards();
+  writeProjectList(projects); renderProjectCards();scheduleDocumentsBackup();
 }
 function renderProjectCards() {
   const grid = $('#projectGrid'), empty = $('#emptyProjects');
@@ -538,7 +582,7 @@ function confirmCreateProject() {
   const item = { id: `p-${Date.now()}`, name: safeName(name), createdAt: Date.now(), updatedAt: Date.now(), scene: { format: 'editor-3d-scene', version: 2, objects: [] } };
   const projects = projectList(); projects.unshift(item); writeProjectList(projects); $('#projectDialog').hidden = true; renderProjectCards(); openProject(item.id);
 }
-async function returnToProjects() { saveCurrentProject(); $('#app').hidden = true; $('#projectHome').hidden = false; renderProjectCards(); }
+async function returnToProjects() { saveCurrentProject();if(pendingTextureImports.size)await Promise.allSettled([...pendingTextureImports]);if(pendingModelImports.size)await Promise.allSettled([...pendingModelImports]); $('#app').hidden = true; $('#projectHome').hidden = false; renderProjectCards(); }
 function download(name, data, type) {
   const url = URL.createObjectURL(new Blob([data], { type }));
   const anchor = document.createElement('a');
@@ -712,24 +756,36 @@ async function chooseRenderFolder() {
   $('#renderStatus').textContent = 'Este navegador no admite elegir una carpeta; el archivo exportado se descargará a Descargas.';
   toast('Elige carpeta no está disponible en este navegador');
 }
+async function buildPortableProject(button=null){
+  saveCurrentProject();while(pendingTextureImports.size)await Promise.allSettled([...pendingTextureImports]);while(pendingModelImports.size)await Promise.allSettled([...pendingModelImports]);while(pendingAssetMigrations.size)await Promise.allSettled([...pendingAssetMigrations]);
+  const data=snapshot();data.modelAssets=[];data.textureAssets=[];
+  const modelKeys=[...new Set(objects.filter(item=>item.userData.kind==='Modelo'&&item.userData.assetKey).map(item=>item.userData.assetKey))];
+  const textureKeys=new Set();for(const item of data.objects)for(const row of item.materials||[])for(const mat of row.materials||[])for(const k of ['baseTextureKey','roughnessTextureKey','normalTextureKey'])if(mat[k])textureKeys.add(mat[k]);
+  for(let i=0;i<modelKeys.length;i++){const key=modelKeys[i],blob=await getModelAsset(key);if(!blob)throw new Error(`Falta el modelo ${key} en el almacenamiento local`);data.modelAssets.push({key,type:blob.type||'model/gltf-binary',data:bytesToBase64(await blob.arrayBuffer())});if(button)button.textContent=`Guardando modelos ${i+1}/${modelKeys.length}`;}
+  let n=0;for(const key of textureKeys){const blob=await getTextureAsset(key);if(!blob)throw new Error(`Falta una textura importada (${key}) en el almacenamiento local`);data.textureAssets.push({key,type:blob.type||'image/png',data:await blobAsDataUrl(blob)});if(button)button.textContent=`Guardando texturas ${++n}/${textureKeys.size}`;}
+  const project=projectList().find(item=>item.id===currentProjectId);data.projectName=project?.name||'Mi escena';data.savedAt=new Date().toISOString();return data;
+}
+let documentBackupTimer=null,documentBackupBusy=false,documentBackupAgain=false;
+function scheduleDocumentsBackup(){if(!Capacitor.isNativePlatform()||!currentProjectId)return;clearTimeout(documentBackupTimer);documentBackupTimer=setTimeout(runDocumentsBackup,12000);}
+async function runDocumentsBackup(){if(documentBackupBusy){documentBackupAgain=true;return;}if(!Capacitor.isNativePlatform()||!currentProjectId)return;documentBackupBusy=true;try{const data=await buildPortableProject();let folder=await NativeRenderExport.getProjectFolder();if(!folder.displayName)return;const name=`${safeName(data.projectName).replace(/\s+/g,'-')}.editor3d.json`;const blob=new Blob([JSON.stringify(data)],{type:'application/json'});await NativeRenderExport.saveProjectFile({name,mimeType:'application/json',data:await blobToBase64(blob)});}catch(error){console.warn('Automatic Documents backup failed',error);toast('No se pudo actualizar la copia en Documents; usa Guardar proyecto para reintentar');}finally{documentBackupBusy=false;if(documentBackupAgain){documentBackupAgain=false;scheduleDocumentsBackup();}}}
 async function saveScene(){
   const button=$('#save');const original=button.textContent;button.disabled=true;button.textContent='Guardando…';
   try{
-    saveCurrentProject();if(pendingTextureImports.size){button.textContent='Terminando texturas…';await Promise.allSettled([...pendingTextureImports]);}if(pendingModelImports.size){button.textContent='Guardando modelos…';await Promise.allSettled([...pendingModelImports]);}const data=snapshot();data.modelAssets=[];data.textureAssets=[];
-    const modelKeys=[...new Set(objects.filter(item=>item.userData.kind==='Modelo'&&item.userData.assetKey).map(item=>item.userData.assetKey))];
-    const textureKeys=new Set();for(const item of data.objects)for(const row of item.materials||[])for(const mat of row.materials||[])for(const k of ['baseTextureKey','roughnessTextureKey','normalTextureKey'])if(mat[k])textureKeys.add(mat[k]);
-    for(let i=0;i<modelKeys.length;i++){const key=modelKeys[i];const blob=await getModelAsset(key);if(!blob)throw new Error(`Falta el modelo ${key} en el almacenamiento local`);data.modelAssets.push({key,type:blob.type||'model/gltf-binary',data:bytesToBase64(await blob.arrayBuffer())});button.textContent=`Guardando modelos ${i+1}/${modelKeys.length}`;}
-    let n=0;for(const key of textureKeys){const blob=await getTextureAsset(key);if(!blob)throw new Error(`Falta una textura importada (${key}) en el almacenamiento local`);data.textureAssets.push({key,type:blob.type||'image/png',data:await blobAsDataUrl(blob)});n++;button.textContent=`Guardando texturas ${n}/${textureKeys.size}`;}
-    const project=projectList().find(item=>item.id===currentProjectId);data.projectName=project?.name||'Mi escena';data.savedAt=new Date().toISOString();
-    download(`${safeName(data.projectName).replace(/\s+/g,'-')}-completa.json`,JSON.stringify(data),'application/json');
-    $('#status').textContent='Escena completa guardada';toast(`Guardado completo · ${data.objects.length} objetos · ${data.textureAssets.length} texturas`);
-  }catch(error){console.error(error);toast(`No se pudo guardar la escena completa: ${error.message||error}`);}
-  finally{button.disabled=false;button.textContent=original||'Guardar escena';}
+    let folder={displayName:'Descargas'};
+    if(Capacitor.isNativePlatform()){
+      folder=await NativeRenderExport.getProjectFolder();
+      if(!folder.displayName){$('#renderStatus').textContent='Elige Documents para guardar el proyecto completo.';await NativeRenderExport.chooseProjectFolder();folder=await NativeRenderExport.getProjectFolder();if(!folder.displayName)throw new Error('No se eligió Documents. El proyecto no se guardó.');}
+    }
+    const data=await buildPortableProject(button);const fileName=`${safeName(data.projectName).replace(/\s+/g,'-')}.editor3d.json`,blob=new Blob([JSON.stringify(data)],{type:'application/json'});
+    if(Capacitor.isNativePlatform()){await NativeRenderExport.saveProjectFile({name:fileName,mimeType:'application/json',data:await blobToBase64(blob)});toast(`Proyecto guardado en ${folder.displayName}: ${fileName}`);}else download(fileName,blob,'application/json');
+    $('#status').textContent='Proyecto completo guardado';toast(`Proyecto guardado · ${data.objects.length} objetos · ${data.modelAssets.length} modelos · ${data.textureAssets.length} texturas`);
+  }catch(error){console.error(error);toast(`No se pudo guardar el proyecto: ${error.message||error}`);}
+  finally{button.disabled=false;button.textContent=original||'Guardar proyecto';}
 }
 
 function restoreMaterialSnapshots(root, rows) {
   if(!Array.isArray(rows))return;const meshes=[];if(root.isMesh)meshes.push(root);root.traverse?.(node=>{if(node.isMesh)meshes.push(node);});
-  for(let i=0;i<Math.min(meshes.length,rows.length);i++){const mats=Array.isArray(meshes[i].material)?meshes[i].material:[meshes[i].material];const saved=rows[i].materials||[];for(let j=0;j<Math.min(mats.length,saved.length);j++){const mat=mats[j],state=saved[j];if(state.color)mat.color?.set(state.color);if(Number.isFinite(state.roughness)&&'roughness'in mat)mat.roughness=state.roughness;if(Number.isFinite(state.metalness)&&'metalness'in mat)mat.metalness=state.metalness;if(state.emissive)mat.emissive?.set(state.emissive);if(Number.isFinite(state.emissiveIntensity)&&'emissiveIntensity'in mat)mat.emissiveIntensity=state.emissiveIntensity;if(state.editorShader)applyTextureShader(mat,state.editorShader);if(state.wetSurface){mat.userData ||= {};mat.userData.wetSurface=true;mat.userData.wetOriginal=state.wetOriginal||{roughness:mat.roughness??0.55,metalness:mat.metalness??0,envMapIntensity:1};}for(const [mapKey,keyName,legacyName] of [['map','baseTextureKey','baseTextureData'],['roughnessMap','roughnessTextureKey','roughnessTextureData'],['normalMap','normalTextureKey','normalTextureData']]){const assetKey=state[keyName];const legacy=state[legacyName];if(assetKey){mat.userData ||= {};mat.userData[keyName]=assetKey;getTextureAsset(assetKey).then(blob=>{if(!blob)return;const url=URL.createObjectURL(blob);new THREE.TextureLoader().load(url,texture=>{URL.revokeObjectURL(url);texture.colorSpace=mapKey==='map'?THREE.SRGBColorSpace:THREE.NoColorSpace;texture.wrapS=texture.wrapT=THREE.RepeatWrapping;mat[mapKey]=texture;mat.needsUpdate=true;},undefined,error=>{URL.revokeObjectURL(url);console.warn('Texture restore failed',error);});}).catch(error=>console.warn('Texture storage missing',assetKey,error));}else if(legacy){new THREE.TextureLoader().load(legacy,texture=>{texture.colorSpace=mapKey==='map'?THREE.SRGBColorSpace:THREE.NoColorSpace;mat[mapKey]=texture;mat.needsUpdate=true;});mat.userData ||= {};mat.userData[keyName]=null;fetch(legacy).then(r=>r.blob()).then(blob=>{const key=`tex-migrated-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;return storeTextureAsset(key,blob).then(()=>{mat.userData[keyName]=key;scheduleProjectSave();});}).catch(error=>console.warn('Legacy texture migration failed',error));}}if(Array.isArray(state.normalScale)&&mat.normalScale)mat.normalScale.fromArray(state.normalScale);mat.needsUpdate=true;}}
+  for(let i=0;i<Math.min(meshes.length,rows.length);i++){const mats=Array.isArray(meshes[i].material)?meshes[i].material:[meshes[i].material];const saved=rows[i].materials||[];for(let j=0;j<Math.min(mats.length,saved.length);j++){const mat=mats[j],state=saved[j];if(state.color)mat.color?.set(state.color);if('roughness'in mat)mat.roughness=THREE.MathUtils.clamp(Number.isFinite(state.roughness)?state.roughness:0.55,0.12,0.94);if(Number.isFinite(state.metalness)&&'metalness'in mat)mat.metalness=state.metalness;if(state.emissive)mat.emissive?.set(state.emissive);if(Number.isFinite(state.emissiveIntensity)&&'emissiveIntensity'in mat)mat.emissiveIntensity=state.emissiveIntensity;if(Number.isFinite(state.transmission)&&'transmission'in mat)mat.transmission=state.transmission;if(Number.isFinite(state.ior)&&'ior'in mat)mat.ior=state.ior;if(Number.isFinite(state.thickness)&&'thickness'in mat)mat.thickness=state.thickness;if(typeof state.transparent==='boolean')mat.transparent=state.transparent;if(Number.isFinite(state.opacity))mat.opacity=state.opacity;if(state.cubeOriginal){mat.userData ||= {};mat.userData.cubeOriginal={...state.cubeOriginal,color:new THREE.Color(`#${String(state.cubeOriginal.color||'ffffff').replace('#','')}`)};}if(state.editorShader)applyTextureShader(mat,state.editorShader);if(state.wetSurface){mat.userData ||= {};mat.userData.wetSurface=true;mat.userData.wetOriginal=state.wetOriginal||{roughness:mat.roughness??0.55,metalness:mat.metalness??0,envMapIntensity:1};}for(const [mapKey,keyName,legacyName] of [['map','baseTextureKey','baseTextureData'],['roughnessMap','roughnessTextureKey','roughnessTextureData'],['normalMap','normalTextureKey','normalTextureData']]){const assetKey=state[keyName];const legacy=state[legacyName];if(assetKey){mat.userData ||= {};mat.userData[keyName]=assetKey;getTextureAsset(assetKey).then(blob=>{if(!blob)return;const url=URL.createObjectURL(blob);new THREE.TextureLoader().load(url,texture=>{URL.revokeObjectURL(url);texture.colorSpace=mapKey==='map'?THREE.SRGBColorSpace:THREE.NoColorSpace;texture.wrapS=texture.wrapT=THREE.RepeatWrapping;mat[mapKey]=texture;mat.needsUpdate=true;},undefined,error=>{URL.revokeObjectURL(url);console.warn('Texture restore failed',error);});}).catch(error=>console.warn('Texture storage missing',assetKey,error));}else if(legacy){new THREE.TextureLoader().load(legacy,texture=>{texture.colorSpace=mapKey==='map'?THREE.SRGBColorSpace:THREE.NoColorSpace;mat[mapKey]=texture;mat.needsUpdate=true;});mat.userData ||= {};mat.userData[keyName]=null;const migration=fetch(legacy).then(r=>r.blob()).then(blob=>{const key=`tex-migrated-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;return storeTextureAsset(key,blob).then(()=>{mat.userData[keyName]=key;saveCurrentProject();});}).catch(error=>console.warn('Legacy texture migration failed',error));pendingAssetMigrations.add(migration);migration.finally(()=>pendingAssetMigrations.delete(migration));}}if(Array.isArray(state.normalScale)&&mat.normalScale)mat.normalScale.fromArray(state.normalScale);mat.needsUpdate=true;}}
 }
 async function loadScene(data) {
   if(data.renderSettings){$('#postLook').value=data.renderSettings.postLook||'cinematic';postEnabled=!!data.renderSettings.postEnabled;$('#postToggle').classList.toggle('active',postEnabled);bloomPass.enabled=postEnabled;lightPostPass.enabled=postEnabled;gridVisible=data.renderSettings.gridVisible!==false;grid.visible=gridVisible;setTool(data.renderSettings.activeTool||'select');if(postEnabled)applyPostLook($('#postLook').value);}
@@ -755,6 +811,7 @@ async function loadScene(data) {
     object.position.fromArray(Array.isArray(item.position) ? item.position : [0, 0.65, 0]);
     object.rotation.fromArray(Array.isArray(item.rotation) ? item.rotation : [0, 0, 0]);
     object.scale.fromArray(Array.isArray(item.scale) ? item.scale : [1, 1, 1]);
+    if(item.geometryRecipe?.type==='roundedBox'){const [w,h,d]=item.geometryRecipe.size;object.geometry.dispose();object.userData.originalCubeGeometry=new THREE.BoxGeometry(w,h,d);object.geometry=roundedBoxGeometry(w,h,d,item.geometryRecipe.radius,5);object.userData.cubeFinish='rounded';}if(item.cubeFinish)object.userData.cubeFinish=item.cubeFinish;
     restoreMaterialSnapshots(object,item.materials);
     if (object.isLight) { if(item.lightColor)object.color.set(item.lightColor); object.intensity = item.intensity ?? object.intensity; if ('distance' in object) object.distance = item.distance ?? object.distance; if ('angle' in object) object.angle = item.angle ?? object.angle; if ('penumbra' in object) object.penumbra = item.penumbra ?? object.penumbra; }
     if (object.isCamera) { object.fov = item.fov || object.fov; object.near = item.near ? Math.max(0.005,item.near) : object.near; object.far = item.far || object.far; object.updateProjectionMatrix(); object.userData.helper?.update(); viewCameraObject = object; }
@@ -819,6 +876,32 @@ function stopImportedClipPreservingPose() {
   activeAnimationTarget = boneTarget || allBones()[0] || selected;
   if (activeAnimationTarget?.isBone) { boneTarget = activeAnimationTarget; window.editorGizmo?.attach(boneTarget); window.editorGizmo?.setMode('rotate'); }
   rebuildTimeline(); toast('Clip detenido · edición manual');
+}
+function boneSide(name){const n=(name||'').toLowerCase();return /(^|[^a-z])(l|left)([^a-z]|$)/.test(n)||/(_|\.|:)l$/.test(n)?'l':/(^|[^a-z])(r|right)([^a-z]|$)/.test(n)||/(_|\.|:)r$/.test(n)?'r':'';}
+function boneRole(name){const n=(name||'').toLowerCase();if(/head|skull/.test(n))return'head';if(/hand|wrist|palm/.test(n))return'hand';if(/foot|ankle|toe|ball/.test(n))return'foot';if(/lowerarm|forearm|elbow/.test(n))return'lowerarm';if(/upperarm|clavicle|shoulder/.test(n))return'upperarm';if(/calf|shin|lowerleg/.test(n))return'calf';if(/thigh|upperleg/.test(n))return'thigh';if(/spine|pelvis|hips/.test(n))return'torso';return'';}
+function beginIkDrag(endBone){
+  if(!currentModel||!endBone?.isBone)return;const role=boneRole(endBone.name),side=boneSide(endBone.name);let allowed=[];
+  if(role==='head')allowed=['torso','head'];else if(['hand','lowerarm','upperarm'].includes(role))allowed=['upperarm','lowerarm','hand'];else if(['foot','calf','thigh'].includes(role))allowed=['thigh','calf','foot'];else return;
+  const ancestors=[];let parent=endBone.parent;while(parent?.isBone){ancestors.unshift(parent);parent=parent.parent;}
+  const chainBones=ancestors.filter(b=>{const r=boneRole(b.name),s=boneSide(b.name);return allowed.includes(r)&&(!side||!s||side===s);});
+  if(role==='head'&&!chainBones.includes(endBone))chainBones.push(endBone);
+  if(chainBones.length<2)return;currentModel.updateMatrixWorld(true);
+  const joints=chainBones.map(b=>b.getWorldPosition(new THREE.Vector3()));joints.push(endBone.getWorldPosition(new THREE.Vector3()));
+  const lengths=joints.slice(1).map((v,i)=>Math.max(v.distanceTo(joints[i]),1e-5));
+  ikDragState={endBone,chainBones,joints,rootPosition:joints[0].clone(),lengths,role,side};
+}
+function solveIkDrag(){
+  const state=ikDragState;if(!state)return;const {chainBones,joints,lengths,rootPosition}=state;currentModel?.updateMatrixWorld(true);
+  const goal=state.endBone.getWorldPosition(new THREE.Vector3());const total=lengths.reduce((a,b)=>a+b,0),distance=rootPosition.distanceTo(goal);
+  if(distance>=total){const direction=goal.clone().sub(rootPosition).normalize();for(let i=1;i<joints.length;i++)joints[i].copy(rootPosition).addScaledVector(direction,lengths.slice(0,i).reduce((a,b)=>a+b,0));}
+  else{joints[joints.length-1].copy(goal);for(let iter=0;iter<8;iter++){joints[0].copy(rootPosition);for(let i=1;i<joints.length;i++){const dir=joints[i].clone().sub(joints[i-1]).normalize();joints[i].copy(joints[i-1]).addScaledVector(dir,lengths[i-1]);}joints[joints.length-1].copy(goal);for(let i=joints.length-2;i>=0;i--){const dir=joints[i].clone().sub(joints[i+1]).normalize();joints[i].copy(joints[i+1]).addScaledVector(dir,lengths[i]);}}}
+  for(let i=0;i<chainBones.length;i++){rotateBoneToward(chainBones[i],joints[i],joints[i+1]);currentModel?.updateMatrixWorld(true);}
+  updateBoneMarkers();
+}
+function rotateBoneToward(bone,from,to){
+  if(!bone||!from||!to)return;bone.parent?.updateWorldMatrix(true,false);bone.updateWorldMatrix(true,false);
+  const child=bone.children.find(node=>node.isBone);if(!child)return;const origin=bone.getWorldPosition(new THREE.Vector3());const oldDirection=child.getWorldPosition(new THREE.Vector3()).sub(origin).normalize();const target=to.clone().sub(from).normalize();if(oldDirection.lengthSq()<1e-9||target.lengthSq()<1e-9)return;
+  const parentQ=bone.parent?.getWorldQuaternion(new THREE.Quaternion())||new THREE.Quaternion();const worldQ=new THREE.Quaternion().setFromUnitVectors(oldDirection,target).multiply(bone.getWorldQuaternion(new THREE.Quaternion()));const localQ=parentQ.invert().multiply(worldQ);bone.quaternion.slerp(localQ,0.5).normalize();
 }
 function allBones() {
   const found = [];
@@ -1170,7 +1253,8 @@ $('#materialClose').addEventListener('click',()=>{$('#materialPanel').hidden=tru
 $('#objectsPanelToggle').addEventListener('click',()=>{const workspace=$('#workspace');if(workspace.classList.contains('show-material')){$('#materialPanel').hidden=true;workspace.classList.remove('show-material','hide-objects');return;}workspace.classList.toggle('hide-objects');});
 $('#materialMeshTarget').addEventListener('change',event=>{renderMaterialMesh=materialTargetsFor(selected).find(mesh=>mesh.uuid===event.target.value)||null;refreshMaterialPanel();});
 $('#materialColor').addEventListener('input',event=>editTargetMaterials(mat=>mat.color?.set(event.target.value)));
-$('#materialRoughness').addEventListener('input',event=>{const value=Number(event.target.value);$('#roughnessValue').value=value.toFixed(2);editTargetMaterials(mat=>{if('roughness'in mat)mat.roughness=value;});});
+$('#materialRoughness').min='0.12';$('#materialRoughness').max='0.94';
+$('#materialRoughness').addEventListener('input',event=>{const value=Number(event.target.value);$('#roughnessValue').value=value.toFixed(2);editTargetMaterials(mat=>{if('roughness'in mat)mat.roughness=THREE.MathUtils.clamp(Number.isFinite(value)?value:0.55,0.12,0.94);});});
 $('#materialMetalness').addEventListener('input',event=>{const value=Number(event.target.value);$('#metalnessValue').value=value.toFixed(2);editTargetMaterials(mat=>{if('metalness'in mat)mat.metalness=value;});});
 $('#materialEmissive').addEventListener('input',event=>editTargetMaterials(mat=>mat.emissive?.set(event.target.value)));
 $('#materialEmissionPower').addEventListener('input',event=>{const value=Number(event.target.value);$('#emissionValue').value=value.toFixed(2);editTargetMaterials(mat=>{if(mat.emissive)mat.emissiveIntensity=value;});});
@@ -1179,7 +1263,7 @@ $('#baseTextureFile').addEventListener('change',e=>importMaterialMap(e.target.fi
 $('#roughnessTextureFile').addEventListener('change',e=>importMaterialMap(e.target.files?.[0],'Mapa roughness','roughnessMap','roughnessTextureData',THREE.NoColorSpace));
 $('#normalTextureFile').addEventListener('change',e=>importMaterialMap(e.target.files?.[0],'Mapa normal','normalMap','normalTextureData',THREE.NoColorSpace));
 $('#normalStrength').addEventListener('input',e=>{const value=Number(e.target.value);$('#normalStrengthValue').value=value.toFixed(2);editTargetMaterials(mat=>mat.normalScale?.set(value,value));});
-$('#wetFloor').addEventListener('click',applyWetFloor);
+$('#wetFloor').addEventListener('click',applyWetFloor);$('#applyCubeFinish').addEventListener('click',applyCubeFinish);
 $('#bakeLighting').addEventListener('click',()=>{lightingBaked=false;prepareRenderLighting();});
 $('#refreshReflections').addEventListener('click',()=>{if(!wetSurfaceCount())return;clearTimeout(reflectionRefreshTimer);reflectionDirty=true;refreshWetReflections(true);});
 $('#renderOpen').addEventListener('click', async () => { $('#renderPanel').hidden = !$('#renderPanel').hidden; $('#renderPath').value = readRenderFolderName(); if (Capacitor.isNativePlatform()) await loadNativeRenderFolder(); else if (!renderFolderHandle) renderFolderHandle = await restoreRenderFolder(); });
@@ -1194,7 +1278,7 @@ $('#duplicate').addEventListener('click',duplicateSelected);
 $('#addMenu')?.addEventListener('click', () => addObject('Cubo'));
 $('#save').addEventListener('click', saveScene);
 $('#exportScene').addEventListener('click', exportGlb);
-$('#importScene').addEventListener('click', () => fileInput.click());
+$('#importScene').addEventListener('click', async () => {if(Capacitor.isNativePlatform()){try{const file=await NativeRenderExport.readProjectFile();const binary=atob(file.data),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);await loadScene(JSON.parse(new TextDecoder().decode(bytes)));toast(`Proyecto ${file.name} importado`);}catch(error){if(!String(error?.message||error).includes('canceled'))toast(`No se pudo abrir el proyecto: ${error.message||error}`);}return;}fileInput.click();});
 fileInput.addEventListener('change', () => { importFile(fileInput.files?.[0]); fileInput.value = ''; });
 $('#gridToggle').addEventListener('click', () => { gridVisible = !gridVisible; grid.visible = gridVisible; });
 $('#frame').addEventListener('click', () => { orbit.target.set(0, 0.6, 0); camera.position.set(5, 4, 7); orbit.update(); });
@@ -1253,13 +1337,14 @@ document.querySelectorAll('[data-tool]').forEach((button) => button.addEventList
 // Open the project library first; the editor initializes only after the user opens/creates a project.
 resize();
 renderProjectCards();
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){saveCurrentProject();if(pendingTextureImports.size)Promise.allSettled([...pendingTextureImports]).then(saveCurrentProject);}});window.addEventListener('pagehide',()=>saveCurrentProject());navigator.storage?.persist?.().catch(()=>{});
 function frame() {
   requestAnimationFrame(frame);
   orbit.update();
   lightPostPass.uniforms.time.value += 0.016;
   if (importedMixer && importedAnimationAction) importedMixer.update(1 / 60);
   if (currentModel && animationMode) updateBoneMarkers();
-  tickReflectionCounter(performance.now());
+
   if (usePostPipeline()) { sceneRenderPass.camera = cameraMode ? activeCamera : camera; composer.render(); }
   else renderer.render(scene, cameraMode ? activeCamera : camera);
 }
