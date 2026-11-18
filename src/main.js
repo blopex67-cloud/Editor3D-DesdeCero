@@ -8,7 +8,6 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { Reflector } from 'three/addons/objects/Reflector.js';
 import { BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality } from 'mediabunny';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 const NativeRenderExport = registerPlugin('RenderExport');
@@ -109,7 +108,7 @@ try {
     }
     node.renderOrder = 999;
   });
-  gizmo.addEventListener('objectChange', () => { lightingBaked=false; renderProperties(); updateBoneMarkers(); if (gizmo.object?.userData.helper) gizmo.object.userData.helper.update(); scheduleProjectSave(); });
+  gizmo.addEventListener('objectChange', () => { lightingBaked=false; markReflectionDirty(); renderProperties(); updateBoneMarkers(); if (gizmo.object?.userData.helper) gizmo.object.userData.helper.update(); scheduleProjectSave(); });
   window.editorGizmo = gizmo;
 } catch (error) {
   console.error('Editor 3D startup error:', error);
@@ -148,14 +147,13 @@ let postEnabled = false;
 let lightingBaked = false;
 let lightingBakePromise = null;
 let renderMaterialMesh = null;
-let wetFloorEnabled = false;
+let reflectionDirty = false;
+let reflectionBusy = false;
+let lastReflectionRefresh = 0;
+let nextReflectionRefresh = 0;
+let reflectionStatusText = '';
+const wetSurfaces = new Map();
 let emissiveBloomActive = false;
-const wetReflector = new Reflector(new THREE.PlaneGeometry(60,60), {clipBias:0.003, textureWidth:768, textureHeight:768, color:0x90949a});
-wetReflector.rotation.x=-Math.PI/2; wetReflector.position.y=-0.019; wetReflector.visible=false; wetReflector.userData.editorGuide=true;
-const reflectorRender=wetReflector.onBeforeRender;
-wetReflector.userData.capturePending=false;wetReflector.onBeforeRender=function(...args){if(this.userData.capturePending&&!this.userData.frozen){reflectorRender.apply(this,args);this.userData.frozen=true;this.userData.capturePending=false;this.onBeforeRender=()=>{};}};
-scene.add(wetReflector);
-
 function toast(message) {
   const element = $('#toast');
   element.textContent = message;
@@ -167,7 +165,7 @@ function updateStatus() {
   $('#status').textContent = `${currentProjectId ? (projectList().find((p) => p.id === currentProjectId)?.name || 'Proyecto') + ' · ' : ''}${objects.length} objeto${objects.length === 1 ? '' : 's'}`;
 }
 function addAsset(kind) {
-  lightingBaked=false;
+  lightingBaked=false;markReflectionDirty();
   if (kind === 'point' || kind === 'directional') {
     const liveLights = assetObjects.filter((asset) => asset.isPointLight || asset.isDirectionalLight).length;
     if (liveLights >= 4) { toast('Límite móvil: usa hasta 4 luces locales'); return; }
@@ -239,7 +237,7 @@ function refreshList() {
     row.className = `object-row${object === selected ? ' selected' : ''}`;
     row.dataset.key = object.uuid;
     const icon = document.createElement('span');
-    icon.textContent = object.userData.kind === 'Esfera' ? '◉' : object.userData.kind === 'Modelo' ? '◈' : '⬡';
+    icon.textContent = object.userData.kind === 'Esfera' ? '◉' : object.userData.kind === 'Modelo' ? '◈' : '⬡'; if(materialTargetsFor(object).some(mesh=>wetSurfaces.has(mesh.uuid)))icon.textContent+=' 💧';
     const name = document.createElement('span');
     name.textContent = object.name;
     row.append(icon, name);
@@ -268,7 +266,7 @@ function select(object) {
   refreshBoneList();
 }
 function addObject(kind = 'Cubo', position = [0, 0.65, 0], color = null) {
-  lightingBaked=false;
+  lightingBaked=false;markReflectionDirty();
   const geometry = kind === 'Esfera' ? new THREE.SphereGeometry(0.62, 24, 16)
     : kind === 'Plano' ? new THREE.PlaneGeometry(1.5, 1.5)
     : new THREE.BoxGeometry(1.15, 1.15, 1.15);
@@ -317,38 +315,91 @@ function refreshMaterialPanel() {
   $('#materialRoughness').value=String(mat.roughness??0.55);$('#roughnessValue').value=Number(mat.roughness??0.55).toFixed(2);
   $('#materialMetalness').value=String(mat.metalness??0.05);$('#metalnessValue').value=Number(mat.metalness??0.05).toFixed(2);
   $('#materialEmissive').value=`#${mat.emissive?.getHexString?.()||'000000'}`;$('#materialEmissionPower').value=String(mat.emissiveIntensity||0);$('#emissionValue').value=Number(mat.emissiveIntensity||0).toFixed(2);
-  $('#materialShader').value=mat.userData?.editorShader||'original';$('#normalStrength').value=String(mat.normalScale?.x??1);$('#normalStrengthValue').value=Number(mat.normalScale?.x??1).toFixed(2);
+  $('#materialShader').value=mat.userData?.editorShader||'original';$('#wetFloor').textContent=wetSurfaces.has(renderMaterialMesh.uuid)||mat.userData?.wetSurface?'Quitar efecto mojado':'Aplicar efecto mojado al objeto';$('#normalStrength').value=String(mat.normalScale?.x??1);$('#normalStrengthValue').value=Number(mat.normalScale?.x??1).toFixed(2);
 }
-function editTargetMaterials(edit) { lightingBaked=false; for(const mat of materialListFor(renderMaterialMesh))edit(mat);emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();scheduleProjectSave(); }
+function editTargetMaterials(edit) { lightingBaked=false; for(const mat of materialListFor(renderMaterialMesh))edit(mat);markReflectionDirty();emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();scheduleProjectSave(); }
 function importMaterialMap(file,inputId,mapKey,userDataKey,colorSpace) {
   if(!file||!renderMaterialMesh)return;
   const targetMesh=renderMaterialMesh;const targetMaterials=materialListFor(targetMesh);const url=URL.createObjectURL(file);lightingBaked=false;new THREE.TextureLoader().load(url,texture=>{URL.revokeObjectURL(url);texture.colorSpace=colorSpace;texture.wrapS=texture.wrapT=THREE.RepeatWrapping;for(const mat of targetMaterials){mat[mapKey]=texture;mat.userData ||= {};}scheduleProjectSave();urlToDataUrl(file,mapKey).then(data=>{for(const mat of targetMaterials){mat.userData ||= {};mat.userData[userDataKey]=data;}scheduleProjectSave();}).catch(error=>toast(`No se pudo guardar el mapa: ${error.message||error}`));toast(`${inputId} aplicado sobre la textura original`);},undefined,error=>{URL.revokeObjectURL(url);toast(`No se pudo cargar el mapa: ${error?.message||error}`);});
 }
 function urlToDataUrl(file,mapKey='map'){return new Promise((resolve,reject)=>{createImageBitmap(file).then(bitmap=>{const scale=Math.min(1,768/Math.max(bitmap.width,bitmap.height));const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(bitmap.width*scale));canvas.height=Math.max(1,Math.round(bitmap.height*scale));canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();canvas.toBlob(blob=>{if(!blob){reject(new Error('No se pudo optimizar el mapa'));return;}const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(reader.error);reader.readAsDataURL(blob);},mapKey==='map'?'image/webp':'image/png',mapKey==='map'?0.9:undefined);}).catch(reject);});}
 
-function applyWetFloor() {
-  wetFloorEnabled=!wetFloorEnabled; lightingBaked=false;
-  ground.material.roughness=wetFloorEnabled?0.035:0.32;ground.material.metalness=wetFloorEnabled?0.92:0.06;
-  ground.visible=!wetFloorEnabled; wetReflector.visible=wetFloorEnabled; wetReflector.userData.frozen=false; wetReflector.userData.capturePending=false;wetReflector.onBeforeRender=function(...args){if(this.userData.capturePending&&!this.userData.frozen){reflectorRender.apply(this,args);this.userData.frozen=true;this.userData.capturePending=false;this.onBeforeRender=()=>{};}};
-  ground.material.needsUpdate=true;$('#wetFloor').textContent=wetFloorEnabled?'Quitar acabado mojado':'Aplicar piso mojado';
-  if(wetFloorEnabled&&!lightingBaked){toast('Precalculando reflejos y sombras · espera 5 s…');prepareRenderLighting();}else toast(wetFloorEnabled?'Acabado mojado aplicado':'Piso restaurado');
+function wetSurfaceCount(){return wetSurfaces.size;}
+function reflectionStatus(message){const el=$('#reflectionStatus'),box=$('#reflectionIndicator');if(!el||!box)return;const value=message||'';if(value!==reflectionStatusText){el.textContent=value;reflectionStatusText=value;}box.hidden=!wetSurfaceCount();}
+function markReflectionDirty(){if(!wetSurfaceCount()){reflectionStatus('');return;}reflectionDirty=true;reflectionStatus('Escena modificada · actualizando reflejos…');}
+function enableWetSurface(mesh, restoring=false){
+  if(!mesh?.isMesh)return false;
+  if(wetSurfaces.has(mesh.uuid))return true;
+  const materials=materialListFor(mesh);if(!materials.length)return false;
+  const width=256;const target=new THREE.WebGLCubeRenderTarget(width,{generateMipmaps:true,minFilter:THREE.LinearMipmapLinearFilter,colorSpace:THREE.SRGBColorSpace});
+  const probe=new THREE.CubeCamera(0.1,100,target);probe.name=`Reflejo dinámico · ${mesh.name||'Malla'}`;scene.add(probe);
+  const state={mesh,probe,target,materials,originals:[],originalEnvMaps:materials.map(mat=>mat.envMap||null)};
+  materials.forEach(mat=>{
+    mat.userData ||= {};let original=mat.userData.wetOriginal;
+    if(!original)original={roughness:mat.roughness??0.55,metalness:mat.metalness??0,envMapIntensity:mat.envMapIntensity??1};
+    mat.userData.wetOriginal=original;mat.userData.wetSurface=true;state.originals.push(original);
+    if('roughness'in mat)mat.roughness=restoring?Math.min(mat.roughness??0.14,0.18):0.14;
+    if('metalness'in mat)mat.metalness=Math.max(mat.metalness??0,0.35);
+    mat.envMap=target.texture;mat.envMapIntensity=1.35;mat.needsUpdate=true;
+  });
+  mesh.userData ||= {};mesh.userData.wetSurface=true;wetSurfaces.set(mesh.uuid,state);markReflectionDirty();
+  $('#wetFloor').textContent='Quitar efecto mojado';reflectionStatus('Efecto mojado · preparando reflejo…');
+  scheduleProjectSave();return true;
 }
-async function prepareRenderLighting() {
+function disableWetSurface(mesh){
+  const state=wetSurfaces.get(mesh?.uuid);if(!state)return false;
+  state.materials.forEach((mat,index)=>{const old=state.originals[index]||mat.userData?.wetOriginal;if(old){if('roughness'in mat)mat.roughness=old.roughness;if('metalness'in mat)mat.metalness=old.metalness;mat.envMapIntensity=old.envMapIntensity??1;}mat.envMap=state.originalEnvMaps[index]||null;if(mat.userData){mat.userData.wetSurface=false;delete mat.userData.wetOriginal;}mat.needsUpdate=true;});
+  scene.remove(state.probe);state.target.dispose();wetSurfaces.delete(mesh.uuid);mesh.userData.wetSurface=false;
+  reflectionDirty=wetSurfaceCount()>0;$('#wetFloor').textContent='Aplicar efecto mojado al objeto';reflectionStatus(wetSurfaceCount()?'Reflejos · actualizando…':'');scheduleProjectSave();return true;
+}
+function applyWetFloor(){
+  const mesh=renderMaterialMesh?.isMesh?renderMaterialMesh:(selected?.isMesh?selected:null);
+  if(!mesh){toast('Selecciona una malla para aplicar el efecto mojado');return;}
+  if(wetSurfaces.has(mesh.uuid)){disableWetSurface(mesh);toast('Efecto mojado quitado de esta malla');}
+  else if(enableWetSurface(mesh)){toast(`Efecto mojado aplicado a ${mesh.name||selected.name}`);}
+}
+function refreshWetReflections(force=false){
+  if(!wetSurfaceCount()||reflectionBusy)return;
+  const now=performance.now();if(!force&&now-lastReflectionRefresh<140)return;
+  reflectionBusy=true;
+  try{
+    for(const state of wetSurfaces.values()){
+      const mesh=state.mesh;if(!mesh.parent)continue;
+      mesh.updateWorldMatrix(true,false);const bounds=new THREE.Box3().setFromObject(mesh);const center=bounds.isEmpty()?mesh.getWorldPosition(new THREE.Vector3()):bounds.getCenter(new THREE.Vector3());
+      const wasVisible=mesh.visible;mesh.visible=false;state.probe.position.copy(center);
+      try{state.probe.update(renderer,scene);}finally{mesh.visible=wasVisible;}
+    }
+    reflectionDirty=false;lastReflectionRefresh=now;nextReflectionRefresh=now+5000;
+    const sec=5;reflectionStatus(`Reflejos en vivo · siguiente actualización ${sec}s`);
+  }catch(error){console.warn('Dynamic reflection update failed',error);reflectionStatus('Reflejo · error al actualizar');}
+  finally{reflectionBusy=false;}
+}
+function tickReflectionCounter(now){
+  if(!wetSurfaceCount()){reflectionStatus('');return;}
+  if(!nextReflectionRefresh)nextReflectionRefresh=now+5000;
+  const remaining=Math.max(0,Math.ceil((nextReflectionRefresh-now)/1000));
+  if(reflectionDirty){if(now-lastReflectionRefresh>=140)refreshWetReflections();}
+  else if(now>=nextReflectionRefresh){reflectionDirty=true;reflectionStatus('Actualizando reflejos…');if(now-lastReflectionRefresh>=140)refreshWetReflections();}
+  else reflectionStatus(`Reflejos en vivo · reinicio en ${remaining}s`);
+}
+function restoreWetSurfaces(){
+  for(const object of objects)for(const mesh of materialTargetsFor(object))if(mesh.userData?.wetSurface||materialListFor(mesh).some(mat=>mat.userData?.wetSurface))enableWetSurface(mesh,true);
+  if(wetSurfaceCount()){reflectionDirty=true;nextReflectionRefresh=0;reflectionStatus('Reflejos · iniciando…');}
+}
+async function prepareRenderLighting(){
   if(lightingBakePromise)return lightingBakePromise;
   if(lightingBaked)return;
   lightingBakePromise=(async()=>{
-    const status=$('#renderStatus');status.textContent='Precalculando iluminación, sombras y reflejos · espera 5 s…';
+    const status=$('#renderStatus');status.textContent='Precalculando sombras · espera 5 s…';
     await new Promise(resolve=>setTimeout(resolve,5000));
-    const restore=hideEditorGuidesForRender();const groundWasVisible=ground.visible;ground.visible=!wetFloorEnabled;wetReflector.visible=wetFloorEnabled;wetReflector.userData.frozen=false;wetReflector.userData.capturePending=true;wetReflector.onBeforeRender=function(...args){if(this.userData.capturePending&&!this.userData.frozen){reflectorRender.apply(this,args);this.userData.frozen=true;this.userData.capturePending=false;this.onBeforeRender=()=>{};}};
-    try {
+    try{
       renderer.shadowMap.enabled=true;sun.castShadow=true;sun.shadow.mapSize.set(1024,1024);sun.shadow.camera.left=-18;sun.shadow.camera.right=18;sun.shadow.camera.top=18;sun.shadow.camera.bottom=-18;sun.shadow.camera.near=0.5;sun.shadow.camera.far=60;sun.shadow.bias=-0.0003;sun.shadow.camera.updateProjectionMatrix();
       for(const object of objects)object.traverse?.(node=>{if(node.isMesh){node.castShadow=true;node.receiveShadow=true;}});
-      renderer.shadowMap.needsUpdate=true;
-      renderer.render(scene,cameraMode?activeCamera:camera);lightingBaked=true;
-      status.textContent='Iluminación, sombras y reflejos precalculados.';
-    } finally {if(!wetFloorEnabled){wetReflector.visible=false;ground.visible=groundWasVisible;}restore();lightingBakePromise=null;}
+      renderer.shadowMap.needsUpdate=true;renderer.render(scene,cameraMode?activeCamera:camera);lightingBaked=true;status.textContent='Sombras precalculadas. Reflejos por objeto se actualizan en vivo.';
+    }finally{lightingBakePromise=null;}
   })();return lightingBakePromise;
 }
+
 function renderProperties() {
   if (!selected) {
     props.textContent = 'Selecciona un objeto';
@@ -367,7 +418,7 @@ function renderProperties() {
   nameInput.addEventListener('change',()=>{selected.name=safeName(nameInput.value);refreshList();saveCurrentProject();});
   $('#selectedCameraView')?.addEventListener('click', () => enterCameraView(selected));
   $('#alignCameraView')?.addEventListener('click',()=>{selected.position.copy(camera.position);selected.quaternion.copy(camera.quaternion);selected.up.set(0,1,0);selected.lookAt(orbit.target);selected.updateProjectionMatrix();selected.userData.helper?.update();scheduleProjectSave();toast('Cámara alineada con la vista del editor');});
-  const lightChanged=()=>{lightingBaked=false;selected.userData.helper?.update?.();scheduleProjectSave();};
+  const lightChanged=()=>{lightingBaked=false;selected.userData.helper?.update?.();markReflectionDirty();scheduleProjectSave();};
   $('#lightColor')?.addEventListener('input',e=>{selected.color.set(e.target.value);lightChanged();});
   $('#lightIntensity')?.addEventListener('input',e=>{selected.intensity=Number(e.target.value);e.target.nextElementSibling.value=selected.intensity.toFixed(2);lightChanged();});
   $('#lightDistance')?.addEventListener('input',e=>{selected.distance=Number(e.target.value);e.target.nextElementSibling.value=selected.distance.toFixed(2);lightChanged();});
@@ -384,7 +435,7 @@ function renderProperties() {
     if (input.dataset.kind === 'scale') selected.scale.setComponent(axis, Math.max(0.01, value));
     if (selected.isCamera && selected.userData.helper) selected.userData.helper.update();
     if (selected.userData.helper?.update) selected.userData.helper.update();
-    saveCurrentProject();
+    lightingBaked=false;markReflectionDirty();saveCurrentProject();
   }));
 }
 function setTool(tool) {
@@ -395,17 +446,18 @@ function setTool(tool) {
 }
 function duplicateSelected() {
   if(!selected){toast('Selecciona un objeto para duplicar');return;}
-  lightingBaked=false;const originalHelper=selected.userData.helper;selected.userData.helper=null;let copy;try{copy=selected.clone(true);}finally{selected.userData.helper=originalHelper;}copy.name=`${selected.name} copia`;copy.position.x+=0.35;copy.userData={...copy.userData,helper:null};
+  lightingBaked=false;markReflectionDirty();const originalHelper=selected.userData.helper;selected.userData.helper=null;let copy;try{copy=selected.clone(true);}finally{selected.userData.helper=originalHelper;}copy.name=`${selected.name} copia`;copy.position.x+=0.35;copy.userData={...copy.userData,helper:null};
   copy.traverse(node=>{if(node.isMesh){const mats=Array.isArray(node.material)?node.material: [node.material];const cloned=mats.map(mat=>mat.clone());node.material=Array.isArray(node.material)?cloned:cloned[0];node.castShadow=true;node.receiveShadow=true;}});
   if(copy.userData.helper){scene.remove(copy.userData.helper);copy.userData.helper=null;}
   if(copy.isLight){copy.userData.helper=copy.isPointLight?new THREE.PointLightHelper(copy,0.14,'#9aa0a6'):copy.isDirectionalLight?new THREE.DirectionalLightHelper(copy,0.35,'#9aa0a6'):null;if(copy.userData.helper)scene.add(copy.userData.helper);assetObjects.push(copy);}
   if(copy.isCamera){copy.userData.helper=new THREE.CameraHelper(copy);scene.add(copy.userData.helper);viewCameraObject=copy;$('#enterCamera').hidden=false;}
-  scene.add(copy);objects.push(copy);select(copy);rebuildTimeline();updateStatus();saveCurrentProject();toast('Objeto duplicado');
+  scene.add(copy);objects.push(copy);for(const mesh of materialTargetsFor(copy))if(materialListFor(mesh).some(mat=>mat.userData?.wetSurface))enableWetSurface(mesh,true);select(copy);rebuildTimeline();updateStatus();saveCurrentProject();toast('Objeto duplicado');
 }
 function removeSelected() {
   if (!selected) return;
   lightingBaked=false;
-  scene.remove(selected);
+  for(const mesh of materialTargetsFor(selected))if(wetSurfaces.has(mesh.uuid))disableWetSurface(mesh);
+  markReflectionDirty();scene.remove(selected);
   if (selected.userData.helper) scene.remove(selected.userData.helper);
   objects.splice(objects.indexOf(selected), 1);
   if (selected === viewCameraObject) viewCameraObject = objects.find((item) => item.isCamera) || null;
@@ -417,11 +469,11 @@ function removeSelected() {
   saveCurrentProject();
 }
 function snapshot() {
-  return { format: 'editor-3d-scene', version: 4, renderSettings:{wetFloorEnabled,postLook:$('#postLook')?.value||'cinematic',postEnabled}, objects: objects.map((object) => ({
+  return { format: 'editor-3d-scene', version: 5, renderSettings:{postLook:$('#postLook')?.value||'cinematic',postEnabled}, objects: objects.map((object) => ({
     name: object.name, kind: object.userData.kind || 'Cubo', assetKey: object.userData.kind === 'Modelo' ? (object.userData.assetKey || null) : undefined, position: object.position.toArray(),
     rotation: object.rotation.toArray(), scale: object.scale.toArray(),
     color: `#${object.material?.color?.getHexString?.() || object.color?.getHexString?.() || 'ffffff'}`,
-    materials: (()=>{const rows=[];object.traverse?.(node=>{if(node.isMesh){const mats=Array.isArray(node.material)?node.material:[node.material];rows.push({nodeName:node.name,materials:mats.map(mat=>({color:mat.color?`#${mat.color.getHexString()}`:null,roughness:mat.roughness,metalness:mat.metalness,emissive:mat.emissive?`#${mat.emissive.getHexString()}`:null,emissiveIntensity:mat.emissiveIntensity,editorShader:mat.userData?.editorShader||'original',baseTextureData:mat.userData?.baseTextureData||null,roughnessTextureData:mat.userData?.roughnessTextureData||null,normalTextureData:mat.userData?.normalTextureData||null,normalScale:mat.normalScale?.toArray?.()||[1,1]}))});}});if(object.isMesh){const mats=Array.isArray(object.material)?object.material:[object.material];rows.push({nodeName:object.name,materials:mats.map(mat=>({color:mat.color?`#${mat.color.getHexString()}`:null,roughness:mat.roughness,metalness:mat.metalness,emissive:mat.emissive?`#${mat.emissive.getHexString()}`:null,emissiveIntensity:mat.emissiveIntensity,editorShader:mat.userData?.editorShader||'original',baseTextureData:mat.userData?.baseTextureData||null,roughnessTextureData:mat.userData?.roughnessTextureData||null,normalTextureData:mat.userData?.normalTextureData||null,normalScale:mat.normalScale?.toArray?.()||[1,1]}))});}return rows;})(),
+    materials: (()=>{const rows=[];object.traverse?.(node=>{if(node.isMesh){const mats=Array.isArray(node.material)?node.material:[node.material];rows.push({nodeName:node.name,materials:mats.map(mat=>({color:mat.color?`#${mat.color.getHexString()}`:null,roughness:mat.roughness,metalness:mat.metalness,emissive:mat.emissive?`#${mat.emissive.getHexString()}`:null,emissiveIntensity:mat.emissiveIntensity,editorShader:mat.userData?.editorShader||'original',wetSurface:!!mat.userData?.wetSurface,wetOriginal:mat.userData?.wetOriginal||null,baseTextureData:mat.userData?.baseTextureData||null,roughnessTextureData:mat.userData?.roughnessTextureData||null,normalTextureData:mat.userData?.normalTextureData||null,normalScale:mat.normalScale?.toArray?.()||[1,1]}))});}});if(object.isMesh){const mats=Array.isArray(object.material)?object.material:[object.material];rows.push({nodeName:object.name,materials:mats.map(mat=>({color:mat.color?`#${mat.color.getHexString()}`:null,roughness:mat.roughness,metalness:mat.metalness,emissive:mat.emissive?`#${mat.emissive.getHexString()}`:null,emissiveIntensity:mat.emissiveIntensity,editorShader:mat.userData?.editorShader||'original',wetSurface:!!mat.userData?.wetSurface,wetOriginal:mat.userData?.wetOriginal||null,baseTextureData:mat.userData?.baseTextureData||null,roughnessTextureData:mat.userData?.roughnessTextureData||null,normalTextureData:mat.userData?.normalTextureData||null,normalScale:mat.normalScale?.toArray?.()||[1,1]}))});}return rows;})(),
     intensity: object.intensity, lightColor:object.color?`#${object.color.getHexString()}`:null, distance: object.distance, angle: object.angle, penumbra: object.penumbra,
     fov: object.fov, near: object.near, far: object.far
   })) };
@@ -646,12 +698,13 @@ async function saveScene() {
 }
 function restoreMaterialSnapshots(root, rows) {
   if(!Array.isArray(rows))return;const meshes=[];if(root.isMesh)meshes.push(root);root.traverse?.(node=>{if(node.isMesh)meshes.push(node);});
-  for(let i=0;i<Math.min(meshes.length,rows.length);i++){const mats=Array.isArray(meshes[i].material)?meshes[i].material:[meshes[i].material];const saved=rows[i].materials||[];for(let j=0;j<Math.min(mats.length,saved.length);j++){const mat=mats[j],state=saved[j];if(state.color)mat.color?.set(state.color);if(Number.isFinite(state.roughness)&&'roughness'in mat)mat.roughness=state.roughness;if(Number.isFinite(state.metalness)&&'metalness'in mat)mat.metalness=state.metalness;if(state.emissive)mat.emissive?.set(state.emissive);if(Number.isFinite(state.emissiveIntensity)&&'emissiveIntensity'in mat)mat.emissiveIntensity=state.emissiveIntensity;if(state.editorShader)applyTextureShader(mat,state.editorShader);for(const [mapKey,dataKey] of [['map','baseTextureData'],['roughnessMap','roughnessTextureData'],['normalMap','normalTextureData']])if(state[dataKey]){new THREE.TextureLoader().load(state[dataKey],texture=>{texture.colorSpace=mapKey==='map'?THREE.SRGBColorSpace:THREE.NoColorSpace;mat[mapKey]=texture;mat.needsUpdate=true;});mat.userData ||= {};mat.userData[dataKey]=state[dataKey];}if(Array.isArray(state.normalScale)&&mat.normalScale)mat.normalScale.fromArray(state.normalScale);mat.needsUpdate=true;}}
+  for(let i=0;i<Math.min(meshes.length,rows.length);i++){const mats=Array.isArray(meshes[i].material)?meshes[i].material:[meshes[i].material];const saved=rows[i].materials||[];for(let j=0;j<Math.min(mats.length,saved.length);j++){const mat=mats[j],state=saved[j];if(state.color)mat.color?.set(state.color);if(Number.isFinite(state.roughness)&&'roughness'in mat)mat.roughness=state.roughness;if(Number.isFinite(state.metalness)&&'metalness'in mat)mat.metalness=state.metalness;if(state.emissive)mat.emissive?.set(state.emissive);if(Number.isFinite(state.emissiveIntensity)&&'emissiveIntensity'in mat)mat.emissiveIntensity=state.emissiveIntensity;if(state.editorShader)applyTextureShader(mat,state.editorShader);if(state.wetSurface){mat.userData ||= {};mat.userData.wetSurface=true;mat.userData.wetOriginal=state.wetOriginal||{roughness:mat.roughness??0.55,metalness:mat.metalness??0,envMapIntensity:1};}for(const [mapKey,dataKey] of [['map','baseTextureData'],['roughnessMap','roughnessTextureData'],['normalMap','normalTextureData']])if(state[dataKey]){new THREE.TextureLoader().load(state[dataKey],texture=>{texture.colorSpace=mapKey==='map'?THREE.SRGBColorSpace:THREE.NoColorSpace;mat[mapKey]=texture;mat.needsUpdate=true;});mat.userData ||= {};mat.userData[dataKey]=state[dataKey];}if(Array.isArray(state.normalScale)&&mat.normalScale)mat.normalScale.fromArray(state.normalScale);mat.needsUpdate=true;}}
 }
 async function loadScene(data) {
-  if(data.renderSettings){wetFloorEnabled=!!data.renderSettings.wetFloorEnabled;ground.visible=!wetFloorEnabled;wetReflector.visible=wetFloorEnabled;ground.material.roughness=wetFloorEnabled?0.035:0.32;ground.material.metalness=wetFloorEnabled?0.92:0.06;$('#wetFloor').textContent=wetFloorEnabled?'Quitar acabado mojado':'Aplicar piso mojado';$('#postLook').value=data.renderSettings.postLook||'cinematic';postEnabled=!!data.renderSettings.postEnabled;$('#postToggle').classList.toggle('active',postEnabled);bloomPass.enabled=postEnabled;lightPostPass.enabled=postEnabled;if(postEnabled)applyPostLook($('#postLook').value);}
+  if(data.renderSettings){$('#postLook').value=data.renderSettings.postLook||'cinematic';postEnabled=!!data.renderSettings.postEnabled;$('#postToggle').classList.toggle('active',postEnabled);bloomPass.enabled=postEnabled;lightPostPass.enabled=postEnabled;if(postEnabled)applyPostLook($('#postLook').value);}
   if (Array.isArray(data?.modelAssets)) for (const asset of data.modelAssets) if (asset?.key&&asset?.data) { const binary=atob(asset.data); const bytes=new Uint8Array(binary.length); for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i); await storeModelAsset(asset.key,new Blob([bytes],{type:'model/gltf-binary'})); }
   if (data?.format !== 'editor-3d-scene' || !Array.isArray(data.objects)) throw new Error('Archivo de escena no válido');
+  for(const state of wetSurfaces.values()){scene.remove(state.probe);state.target.dispose();}wetSurfaces.clear();reflectionDirty=false;nextReflectionRefresh=0;reflectionStatus('');
   for (const object of [...objects]) { scene.remove(object); if (object.userData.helper) scene.remove(object.userData.helper); }
   for (const marker of boneDots.values()) scene.remove(marker);
   boneDots.clear(); objects.length = 0; assetObjects.length = 0; selected = null; currentModel = null; boneTarget = null; importedMixer = null; importedClips = []; importedAnimationAction = null; viewCameraObject = null; $('#animationPanel').querySelector('.clip-box')?.remove();
@@ -675,13 +728,13 @@ async function loadScene(data) {
     if (object.isCamera) { object.fov = item.fov || object.fov; object.near = item.near || object.near; object.far = item.far || object.far; object.updateProjectionMatrix(); object.userData.helper?.update(); viewCameraObject = object; }
   }
   for(const item of modelItems){if(!item.assetKey)continue;try{const blob=await getModelAsset(item.assetKey);if(!blob)continue;const buffer=await blob.arrayBuffer();await new Promise((resolve,reject)=>new GLTFLoader().parse(buffer,'',(gltf)=>{const model=gltf.scene;model.name=safeName(item.name||'Modelo');model.userData.kind='Modelo';model.userData.assetKey=item.assetKey;model.position.fromArray(item.position||[0,0,0]);model.rotation.fromArray(item.rotation||[0,0,0]);model.scale.fromArray(item.scale||[1,1,1]);restoreMaterialSnapshots(model,item.materials);model.traverse(child=>{if(child.isMesh){child.castShadow=true;child.receiveShadow=true;}});scene.add(model);objects.push(model);currentModel=model;importedClips=gltf.animations||[];importedMixer=importedClips.length?new THREE.AnimationMixer(model):null;makeBoneMarkers(model);resolve();},reject));}catch(error){console.warn('Could not restore imported model',error);}}
-  loadingProjectScene=false;emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();
+  loadingProjectScene=false;restoreWetSurfaces();emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();
   if (viewCameraObject) $('#enterCamera').hidden = false;
   refreshList(); renderProperties(); updateStatus(); saveCurrentProject(); toast('Escena y modelos cargados');
 }
 function importFile(file) {
   if (!file) return;
-  lightingBaked=false;
+  lightingBaked=false;markReflectionDirty();
   if (file.name.toLowerCase().endsWith('.json')) {
     file.text().then((text) => loadScene(JSON.parse(text))).catch((error) => toast(error.message || 'No se pudo abrir la escena'));
     return;
@@ -695,7 +748,7 @@ function importFile(file) {
     emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();
     if (importedAnimationAction) { importedAnimationAction.stop(); importedAnimationAction = null; }
     model.userData.assetKey = `model-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
-    scene.add(model); objects.push(model); currentModel = model; boneTarget = null; select(model); makeBoneMarkers(model);
+    scene.add(model); objects.push(model);markReflectionDirty(); currentModel = model; boneTarget = null; select(model); makeBoneMarkers(model);
     importedClips = gltf.animations || [];
     persistModelAsset(model, importedClips).then(() => { saveCurrentProject(); toast('Modelo y animaciones guardados en el proyecto'); }).catch(error => { console.error(error); toast('No se pudo guardar el modelo importado'); });
     importedMixer = importedClips.length ? new THREE.AnimationMixer(model) : null;
@@ -1101,6 +1154,7 @@ $('#normalTextureFile').addEventListener('change',e=>importMaterialMap(e.target.
 $('#normalStrength').addEventListener('input',e=>{const value=Number(e.target.value);$('#normalStrengthValue').value=value.toFixed(2);editTargetMaterials(mat=>mat.normalScale?.set(value,value));});
 $('#wetFloor').addEventListener('click',applyWetFloor);
 $('#bakeLighting').addEventListener('click',()=>{lightingBaked=false;prepareRenderLighting();});
+$('#refreshReflections').addEventListener('click',()=>{reflectionDirty=true;if(!wetSurfaceCount())return;refreshWetReflections(true);});
 $('#renderOpen').addEventListener('click', async () => { $('#renderPanel').hidden = !$('#renderPanel').hidden; $('#renderPath').value = readRenderFolderName(); if (Capacitor.isNativePlatform()) await loadNativeRenderFolder(); else if (!renderFolderHandle) renderFolderHandle = await restoreRenderFolder(); });
 $('#renderClose').addEventListener('click', () => { $('#renderPanel').hidden = true; });
 $('#chooseRenderPath').addEventListener('click', chooseRenderFolder);
@@ -1176,8 +1230,10 @@ function frame() {
   requestAnimationFrame(frame);
   orbit.update();
   lightPostPass.uniforms.time.value += 0.016;
-  if (importedMixer && importedAnimationAction) importedMixer.update(1 / 60);
+  if (importedMixer && importedAnimationAction) { importedMixer.update(1 / 60);markReflectionDirty(); }
+  if(isPlaying)markReflectionDirty();
   if (currentModel && animationMode) updateBoneMarkers();
+  tickReflectionCounter(performance.now());
   if (usePostPipeline()) { sceneRenderPass.camera = cameraMode ? activeCamera : camera; composer.render(); }
   else renderer.render(scene, cameraMode ? activeCamera : camera);
 }
