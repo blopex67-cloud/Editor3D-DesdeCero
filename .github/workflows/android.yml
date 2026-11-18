@@ -49,6 +49,7 @@ jobs:
           npx cap add android
           npx cap sync android
           python3 scripts/patch_android.py
+          python3 scripts/brand_android.py
           python3 - <<'PY'
           from pathlib import Path
           import re
