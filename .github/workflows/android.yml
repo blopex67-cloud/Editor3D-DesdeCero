@@ -72,7 +72,20 @@ jobs:
           path.write_text(text)
           if 'android:screenOrientation="landscape"' not in tag:
               raise SystemExit('Could not verify landscape orientation')
-          print('Verified MainActivity orientation: landscape')
+          app_pattern = re.compile(r'<application\b[^>]*>', re.S)
+          app_match = app_pattern.search(text)
+          if not app_match:
+              raise SystemExit('Application element not found in Android manifest')
+          app_tag = app_match.group(0)
+          if re.search(r'android:largeHeap="[^"]*"', app_tag):
+              app_tag = re.sub(r'android:largeHeap="[^"]*"', 'android:largeHeap="true"', app_tag)
+          else:
+              app_tag = app_tag[:-1] + ' android:largeHeap="true">'
+          text = text[:app_match.start()] + app_tag + text[app_match.end():]
+          path.write_text(text)
+          if 'android:largeHeap="true"' not in app_tag:
+              raise SystemExit('Could not verify large heap configuration')
+          print('Verified landscape and larger available heap for large model imports')
           PY
           cd android
           chmod +x gradlew
