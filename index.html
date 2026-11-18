@@ -9,7 +9,7 @@
 <body>
   <div id="projectHome" class="project-home">
     <header class="home-header"><div class="home-logo">⬡</div><div><b>Editor 3D</b><small>Proyectos</small></div><button id="createProject">＋ Nuevo proyecto</button></header>
-    <section class="home-content"><div class="home-title"><h1>Mis proyectos</h1><p>Crea una escena nueva o retoma tu trabajo.</p></div><div class="project-grid" id="projectGrid"></div><div class="empty-projects" id="emptyProjects"><div>▧</div><b>Aún no hay proyectos</b><span>Crea tu primer proyecto para empezar.</span><button id="createProjectEmpty">＋ Crear proyecto</button></div><div class="project-dialog" id="projectDialog" hidden><div class="project-dialog-card"><b>Nuevo proyecto</b><span>Dale un nombre a tu escena 3D.</span><input id="projectNameInput" type="text" maxlength="40" placeholder="Mi proyecto 3D"><div><button id="cancelProject">Cancelar</button><button id="confirmProject">Crear proyecto</button></div></div></div></section>
+    <section class="home-content"><div class="home-title"><h1>Mis proyectos</h1><p>Crea una escena nueva o retoma tu trabajo.</p><button id="importProjectHome">Importar proyecto guardado</button><input id="projectFileInput" type="file" accept=".json,.editor3d.json,application/json" hidden></div><div class="project-grid" id="projectGrid"></div><div class="empty-projects" id="emptyProjects"><div>▧</div><b>Aún no hay proyectos</b><span>Crea tu primer proyecto para empezar.</span><button id="createProjectEmpty">＋ Crear proyecto</button></div><div class="project-dialog" id="projectDialog" hidden><div class="project-dialog-card"><b>Nuevo proyecto</b><span>Dale un nombre a tu escena 3D.</span><input id="projectNameInput" type="text" maxlength="40" placeholder="Mi proyecto 3D"><div><button id="cancelProject">Cancelar</button><button id="confirmProject">Crear proyecto</button></div></div></div></section>
   </div>
   <div id="app" hidden>
     <header class="topbar">
@@ -25,6 +25,7 @@
         <button id="undo" title="Deshacer">↶</button>
         <button id="objectsPanelToggle" title="Abrir o cerrar objetos">Objetos</button>
         <button id="materialPanelToggle" title="Abrir o cerrar material">Material</button>
+        <button id="skyPanelToggle" title="Cielo, día y noche">SKY</button>
         <button id="assetsToggle" title="Abrir biblioteca de assets">Assets</button>
       </div>
     </header>
@@ -59,6 +60,7 @@
         <div class="toast" id="toast"></div>
       </section>
       <aside class="right-panel">
+        <section class="sky-panel" id="skyPanel" hidden><div class="assets-head"><b>SKY · CIELO REALISTA</b><button id="skyClose">×</button></div><label>Pack de cielo<select id="skyPreset"><option value="day">Día claro</option><option value="sunset">Atardecer</option><option value="night">Noche estrellada</option><option value="cloudy">Nublado</option></select></label><button id="skyApply">Aplicar cielo</button><label class="sky-check"><input id="skyMovingClouds" type="checkbox"> Nubes en movimiento</label><label>Velocidad de nubes<input id="skyCloudSpeed" type="range" min="0" max="3" step="0.1" value="0.6"><output id="skyCloudSpeedValue">0.6</output></label><label>Hora del día<input id="skyTime" type="range" min="0" max="24" step="0.1" value="14"><output id="skyTimeValue">14:00</output></label><small>Cielo procedural, con nubes animadas; funciona sin conexión y conserva el material pintado.</small></section>
         <section class="outliner">
           <div class="panel-tabs"><span>Hierarchy</span><span>Scene</span></div>
           <div class="animation-panel" id="animationPanel" hidden>
