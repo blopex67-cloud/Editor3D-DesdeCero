@@ -12,14 +12,12 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality } from 'mediabunny';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 const NativeRenderExport = registerPlugin('RenderExport');
-let skyMesh=null;
-let skyState={preset:'day',timeOfDay:14};
 import '../style.css';
 
 const $ = (selector) => document.querySelector(selector);
 const container = $('#scene');
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#5f87a3');
+scene.background = new THREE.Color('#501c23');
 const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 500);
 camera.position.set(5, 4, 7);
 let renderer;
@@ -146,30 +144,6 @@ const environmentScene=new RoomEnvironment();
 scene.environment=environmentGenerator.fromScene(environmentScene,0.04).texture;
 scene.environmentIntensity=0.85;
 environmentGenerator.dispose();
-function buildSkyTexture(preset,hour){
-  const canvas=document.createElement('canvas');canvas.width=512;canvas.height=256;const ctx=canvas.getContext('2d');
-  const night=preset==='night'||hour<6||hour>19,sunset=preset==='sunset'||(hour>=17&&hour<=19),cloudy=preset==='cloudy';
-  const top=night?'#07132e':sunset?'#263b65':'#247ac0',horizon=night?'#243454':sunset?'#ff9b63':cloudy?'#aab9c5':'#bfdcf0';
-  const grad=ctx.createLinearGradient(0,0,0,canvas.height);grad.addColorStop(0,top);grad.addColorStop(.64,horizon);grad.addColorStop(1,night?'#647286':sunset?'#ffcf8e':cloudy?'#d0d6da':'#f2ddc2');ctx.fillStyle=grad;ctx.fillRect(0,0,canvas.width,canvas.height);
-  if(night){let seed=1831;const rand=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296;};for(let i=0;i<140;i++){const x=rand()*512,y=rand()*156,r=.4+rand()*1.15;ctx.fillStyle=`rgba(240,246,255,${.35+rand()*.55})`;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();}}
-  else{const sunX=sunset?canvas.width*.75:canvas.width*.82,sunY=canvas.height*.42;const glow=ctx.createRadialGradient(sunX,sunY,2,sunX,sunY,70);glow.addColorStop(0,sunset?'rgba(255,242,194,.95)':'rgba(255,247,214,.98)');glow.addColorStop(.14,sunset?'rgba(255,191,123,.42)':'rgba(255,246,208,.40)');glow.addColorStop(1,'rgba(255,246,208,0)');ctx.fillStyle=glow;ctx.fillRect(sunX-75,sunY-75,150,150);ctx.fillStyle=sunset?'#fff0c8':'#fff8df';ctx.beginPath();ctx.arc(sunX,sunY,9,0,Math.PI*2);ctx.fill();}
-  if(cloudy||preset==='day'){
-    let seed=641+({day:1,sunset:2,night:3,cloudy:4}[preset]||1);const rand=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296;};
-    ctx.save();ctx.filter='blur(7px)';const clusters=cloudy?13:7;
-    for(let c=0;c<clusters;c++){const cx=rand()*canvas.width,cy=35+rand()*125,parts=cloudy?12:8;for(let i=0;i<parts;i++){const x=cx+(rand()-.5)*(cloudy?90:68),y=cy+(rand()-.5)*22,r=cloudy?12+rand()*18:8+rand()*12;ctx.fillStyle=cloudy?'rgba(240,244,247,.55)':'rgba(255,255,255,.42)';ctx.beginPath();ctx.ellipse(x,y,r*1.5,r,0,0,Math.PI*2);ctx.fill();}}
-    ctx.restore();
-  }
-  const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;texture.mapping=THREE.UVMapping;texture.generateMipmaps=true;texture.minFilter=THREE.LinearMipmapLinearFilter;texture.magFilter=THREE.LinearFilter;texture.needsUpdate=true;return texture;
-}
-function createSky(){skyMesh=new THREE.Mesh(new THREE.SphereGeometry(150,24,16),new THREE.MeshBasicMaterial({map:buildSkyTexture('day',14),side:THREE.BackSide,depthWrite:false,depthTest:false,toneMapped:false}));skyMesh.name='Cielo estático';skyMesh.renderOrder=-1000;skyMesh.frustumCulled=false;scene.add(skyMesh);}
-createSky();
-function applySkyState(state={},persist=true){
-  skyState={preset:state.preset||skyState.preset||'day',timeOfDay:Number(state.timeOfDay??skyState.timeOfDay??14)};const presets={day:0,sunset:1,night:2,cloudy:3};const preset=skyState.preset||'day',t=Number(skyState.timeOfDay??14),night=preset==='night'||t<6||t>19;
-  if(skyMesh){const old=skyMesh.material.map;skyMesh.material.map=buildSkyTexture(preset,t);skyMesh.material.needsUpdate=true;old?.dispose();}
-  sun.position.set(Math.cos((t-12)*Math.PI/12)*9,Math.sin((t-6)*Math.PI/12)*10,5);sun.intensity=night?0.12:(preset==='sunset'?1.55:preset==='cloudy'?1.55:2.6);sun.color.set(night?'#8aaaff':preset==='sunset'?'#ffbd83':'#ffffff');scene.environmentIntensity=night?0.22:(preset==='sunset'?0.65:preset==='cloudy'?0.58:0.85);const hemi=scene.children.find(x=>x.isHemisphereLight);if(hemi){hemi.intensity=night?0.28:preset==='cloudy'?0.72:1.05;hemi.color.set(night?'#6a83bd':'#fff5e8');}
-  $('#skyTime').value=String(t);$('#skyTimeValue').value=`${String(Math.floor(t)).padStart(2,'0')}:${String(Math.round((t%1)*60)).padStart(2,'0')}`;$('#skyPreset').value=preset;if(persist)scheduleProjectSave();
-}
-
 const composer = new EffectComposer(renderer);
 composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25)); // Lower-resolution post FX for mobile GPUs.
 const sceneRenderPass = new RenderPass(scene, camera);
@@ -551,7 +525,7 @@ function removeSelected() {
 function snapshot() {
   const modelPoses=[];for(const root of objects.filter(item=>item.userData.kind==='Modelo'))root.traverse(node=>{if(!node.isBone)return;const path=[];let current=node;while(current&&current!==root){const parent=current.parent;if(!parent)break;path.unshift(parent.children.indexOf(current));current=parent;}modelPoses.push({owner:root.userData.assetKey||root.name,path,position:node.position.toArray(),quaternion:node.quaternion.toArray(),scale:node.scale.toArray()});});
   const animationData={loop:animationLoop,keyframes:[...keyframes.entries()].map(([frame,pose])=>({frame,targets:[...pose.entries()].map(([uuid,transform])=>{const node=[...objects,...allBones()].find(item=>item.uuid===uuid);if(!node)return null;let root=node;while(root.parent&&!objects.includes(root))root=root.parent;const objectIndex=objects.indexOf(root),path=[];let current=node;while(current!==root&&current.parent){path.unshift(current.parent.children.indexOf(current));current=current.parent;}return{name:node.name||'',kind:node.isBone?'bone':'object',owner:node.isBone?(root.name||''):node.userData?.kind||'',objectIndex,path,transform};}).filter(Boolean)}))};
-  return { format: 'editor-3d-scene', version: 8, renderSettings:{postLook:$('#postLook')?.value||'cinematic',postEnabled,gridVisible,activeTool,cameraMode,sky:{...skyState},activeCameraName:cameraMode?activeCamera?.name||'':viewCameraObject?.name||'',selectedName:selected?.name||'',currentFrame}, animation:animationData, modelPoses, objects: objects.map((object) => ({
+  return { format: 'editor-3d-scene', version: 8, renderSettings:{postLook:$('#postLook')?.value||'cinematic',postEnabled,gridVisible,activeTool,cameraMode,activeCameraName:cameraMode?activeCamera?.name||'':viewCameraObject?.name||'',selectedName:selected?.name||'',currentFrame}, animation:animationData, modelPoses, objects: objects.map((object) => ({
     name: object.name, kind: object.userData.kind || 'Cubo', assetKey: object.userData.kind === 'Modelo' ? (object.userData.assetKey || null) : undefined, position: object.position.toArray(),
     rotation: object.rotation.toArray(), scale: object.scale.toArray(),
     color: `#${object.material?.color?.getHexString?.() || object.color?.getHexString?.() || 'ffffff'}`,
@@ -826,7 +800,7 @@ function restoreMaterialSnapshots(root, rows) {
   for(let i=0;i<Math.min(meshes.length,rows.length);i++){const mats=Array.isArray(meshes[i].material)?meshes[i].material:[meshes[i].material];const saved=rows[i].materials||[];for(let j=0;j<Math.min(mats.length,saved.length);j++){const mat=mats[j],state=saved[j];if(state.color)mat.color?.set(state.color);if('roughness'in mat)mat.roughness=THREE.MathUtils.clamp(Number.isFinite(state.roughness)?state.roughness:0.55,0.12,0.94);if(Number.isFinite(state.metalness)&&'metalness'in mat)mat.metalness=state.metalness;if(state.emissive)mat.emissive?.set(state.emissive);if(Number.isFinite(state.emissiveIntensity)&&'emissiveIntensity'in mat)mat.emissiveIntensity=state.emissiveIntensity;if(Number.isFinite(state.transmission)&&'transmission'in mat)mat.transmission=state.transmission;if(Number.isFinite(state.ior)&&'ior'in mat)mat.ior=state.ior;if(Number.isFinite(state.thickness)&&'thickness'in mat)mat.thickness=state.thickness;if(typeof state.transparent==='boolean')mat.transparent=state.transparent;if(Number.isFinite(state.opacity))mat.opacity=state.opacity;if(state.cubeOriginal){mat.userData ||= {};mat.userData.cubeOriginal={...state.cubeOriginal,color:new THREE.Color(`#${String(state.cubeOriginal.color||'ffffff').replace('#','')}`)};}if(state.editorShader)applyTextureShader(mat,state.editorShader);if(state.wetSurface){mat.userData ||= {};mat.userData.wetSurface=true;mat.userData.wetOriginal=state.wetOriginal||{roughness:mat.roughness??0.55,metalness:mat.metalness??0,envMapIntensity:1};}for(const [mapKey,keyName,legacyName] of [['map','baseTextureKey','baseTextureData'],['roughnessMap','roughnessTextureKey','roughnessTextureData'],['normalMap','normalTextureKey','normalTextureData']]){const assetKey=state[keyName];const legacy=state[legacyName];if(assetKey){mat.userData ||= {};mat.userData[keyName]=assetKey;getTextureAsset(assetKey).then(blob=>{if(!blob)return;const url=URL.createObjectURL(blob);new THREE.TextureLoader().load(url,texture=>{URL.revokeObjectURL(url);texture.colorSpace=mapKey==='map'?THREE.SRGBColorSpace:THREE.NoColorSpace;texture.wrapS=texture.wrapT=THREE.RepeatWrapping;mat[mapKey]=texture;mat.needsUpdate=true;},undefined,error=>{URL.revokeObjectURL(url);console.warn('Texture restore failed',error);});}).catch(error=>console.warn('Texture storage missing',assetKey,error));}else if(legacy){new THREE.TextureLoader().load(legacy,texture=>{texture.colorSpace=mapKey==='map'?THREE.SRGBColorSpace:THREE.NoColorSpace;mat[mapKey]=texture;mat.needsUpdate=true;});mat.userData ||= {};mat.userData[keyName]=null;const migration=fetch(legacy).then(r=>r.blob()).then(blob=>{const key=`tex-migrated-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;return storeTextureAsset(key,blob).then(()=>{mat.userData[keyName]=key;saveCurrentProject();});}).catch(error=>console.warn('Legacy texture migration failed',error));pendingAssetMigrations.add(migration);migration.finally(()=>pendingAssetMigrations.delete(migration));}}if(Array.isArray(state.normalScale)&&mat.normalScale)mat.normalScale.fromArray(state.normalScale);mat.needsUpdate=true;}}
 }
 async function loadScene(data) {
-  if(data.renderSettings){if(data.renderSettings.sky)applySkyState(data.renderSettings.sky,false);$('#postLook').value=data.renderSettings.postLook||'cinematic';postEnabled=!!data.renderSettings.postEnabled;$('#postToggle').classList.toggle('active',postEnabled);bloomPass.enabled=postEnabled;lightPostPass.enabled=postEnabled;gridVisible=data.renderSettings.gridVisible!==false;grid.visible=gridVisible;setTool(data.renderSettings.activeTool||'select');if(postEnabled)applyPostLook($('#postLook').value);}
+  if(data.renderSettings){$('#postLook').value=data.renderSettings.postLook||'cinematic';postEnabled=!!data.renderSettings.postEnabled;$('#postToggle').classList.toggle('active',postEnabled);bloomPass.enabled=postEnabled;lightPostPass.enabled=postEnabled;gridVisible=data.renderSettings.gridVisible!==false;grid.visible=gridVisible;setTool(data.renderSettings.activeTool||'select');if(postEnabled)applyPostLook($('#postLook').value);}
   if(Array.isArray(data?.textureAssets))for(const asset of data.textureAssets)if(asset?.key&&asset?.data){const blob=asset.data.startsWith('data:')?await(await fetch(asset.data)).blob():new Blob([Uint8Array.from(atob(asset.data),c=>c.charCodeAt(0))],{type:asset.type||'image/png'});await storeTextureAsset(asset.key,blob);}
   if (Array.isArray(data?.modelAssets)) for (const asset of data.modelAssets) if (asset?.key&&asset?.data) { const binary=atob(asset.data); const bytes=new Uint8Array(binary.length); for(let i=0;i<bytes.length;i++) bytes[i]=binary.charCodeAt(i); await storeModelAsset(asset.key,new Blob([bytes],{type:asset.type||'model/gltf-binary'})); }
   if (data?.format !== 'editor-3d-scene' || !Array.isArray(data.objects)) throw new Error('Archivo de escena no válido');
@@ -919,17 +893,17 @@ function stopImportedClipPreservingPose() {
   }
   if (currentModel) { animationMode = true; document.body.classList.add('animating'); $('#animationPanel').hidden = false; $('#animationTimeline').hidden = false; $('#animMode').innerHTML = 'Animation <span>⌄</span>'; }
   activeAnimationTarget = boneTarget || allBones()[0] || selected;
-  if (activeAnimationTarget?.isBone) { boneTarget = activeAnimationTarget; window.editorGizmo?.attach(boneTarget); window.editorGizmo?.setMode('rotate'); }
+  if (activeAnimationTarget?.isBone) { boneTarget = activeAnimationTarget; window.editorGizmo?.attach(boneTarget); window.editorGizmo?.setMode(['hand','foot','head'].includes(boneRole(boneTarget.name))?'translate':'rotate'); }
   rebuildTimeline(); toast('Clip detenido · edición manual');
 }
-function boneSide(name){const n=(name||'').toLowerCase();return /(^|[^a-z])(l|left)([^a-z]|$)/.test(n)||/(_|\.|:)l$/.test(n)?'l':/(^|[^a-z])(r|right)([^a-z]|$)/.test(n)||/(_|\.|:)r$/.test(n)?'r':'';}
-function boneRole(name){const n=(name||'').toLowerCase();if(/head|skull/.test(n))return'head';if(/hand|wrist|palm/.test(n))return'hand';if(/foot|ankle|toe|ball/.test(n))return'foot';if(/lowerarm|forearm|elbow/.test(n))return'lowerarm';if(/upperarm|clavicle|shoulder/.test(n))return'upperarm';if(/calf|shin|lowerleg/.test(n))return'calf';if(/thigh|upperleg/.test(n))return'thigh';if(/spine|pelvis|hips/.test(n))return'torso';return'';}
+function boneSide(name){const n=(name||'').toLowerCase();return n.includes('left')||/(^|[^a-z])l([^a-z]|$)/.test(n)||/(_|\.|:)l$/.test(n)?'l':n.includes('right')||/(^|[^a-z])r([^a-z]|$)/.test(n)||/(_|\.|:)r$/.test(n)?'r':'';}
+function boneRole(name){const n=(name||'').toLowerCase().replace(/^(?:mixamorig|armature|rig)[:_]?/,'').replace(/[^a-z0-9]/g,'');if(/head|skull/.test(n))return'head';if(/hand|wrist|palm/.test(n))return'hand';if(/foot|ankle|toe|ball/.test(n))return'foot';if(/lowerarm|forearm|elbow/.test(n))return'lowerarm';if(/upperarm|clavicle|shoulder/.test(n)||/^(left|right)?arm$/.test(n))return'upperarm';if(/calf|shin|lowerleg|(?:left|right)?leg$/.test(n))return'calf';if(/thigh|upperleg|upleg|femur/.test(n))return'thigh';if(/spine|pelvis|hips/.test(n))return'torso';if(/neck/.test(n))return'torso';return'';}
 function beginIkDrag(endBone){
   if(!currentModel||!endBone?.isBone)return;const role=boneRole(endBone.name),side=boneSide(endBone.name);let allowed=[];
   if(role==='head')allowed=['torso','head'];else if(['hand','lowerarm','upperarm'].includes(role))allowed=['upperarm','lowerarm','hand'];else if(['foot','calf','thigh'].includes(role))allowed=['thigh','calf','foot'];else return;
   const ancestors=[];let parent=endBone.parent;while(parent?.isBone){ancestors.unshift(parent);parent=parent.parent;}
   const chainBones=ancestors.filter(b=>{const r=boneRole(b.name),s=boneSide(b.name);return allowed.includes(r)&&(!side||!s||side===s);});
-  if(role==='head'&&!chainBones.includes(endBone))chainBones.push(endBone);
+  if(role==='head'&&chainBones.length>3)chainBones.splice(0,chainBones.length-3);
   if(chainBones.length<2)return;currentModel.updateMatrixWorld(true);
   const joints=chainBones.map(b=>b.getWorldPosition(new THREE.Vector3()));joints.push(endBone.getWorldPosition(new THREE.Vector3()));
   const lengths=joints.slice(1).map((v,i)=>Math.max(v.distanceTo(joints[i]),1e-5));
@@ -940,12 +914,12 @@ function solveIkDrag(){
   const goal=state.endBone.getWorldPosition(new THREE.Vector3());const total=lengths.reduce((a,b)=>a+b,0),distance=rootPosition.distanceTo(goal);
   if(distance>=total){const direction=goal.clone().sub(rootPosition).normalize();for(let i=1;i<joints.length;i++)joints[i].copy(rootPosition).addScaledVector(direction,lengths.slice(0,i).reduce((a,b)=>a+b,0));}
   else{joints[joints.length-1].copy(goal);for(let iter=0;iter<8;iter++){joints[0].copy(rootPosition);for(let i=1;i<joints.length;i++){const dir=joints[i].clone().sub(joints[i-1]).normalize();joints[i].copy(joints[i-1]).addScaledVector(dir,lengths[i-1]);}joints[joints.length-1].copy(goal);for(let i=joints.length-2;i>=0;i--){const dir=joints[i].clone().sub(joints[i+1]).normalize();joints[i].copy(joints[i+1]).addScaledVector(dir,lengths[i]);}}}
-  for(let i=0;i<chainBones.length;i++){rotateBoneToward(chainBones[i],joints[i],joints[i+1]);currentModel?.updateMatrixWorld(true);}
+  for(let i=0;i<chainBones.length;i++){rotateBoneToward(chainBones[i],joints[i],joints[i+1],chainBones[i+1]||state.endBone);currentModel?.updateMatrixWorld(true);}
   updateBoneMarkers();
 }
-function rotateBoneToward(bone,from,to){
+function rotateBoneToward(bone,from,to,child=null){
   if(!bone||!from||!to)return;bone.parent?.updateWorldMatrix(true,false);bone.updateWorldMatrix(true,false);
-  const child=bone.children.find(node=>node.isBone);if(!child)return;const origin=bone.getWorldPosition(new THREE.Vector3());const oldDirection=child.getWorldPosition(new THREE.Vector3()).sub(origin).normalize();const target=to.clone().sub(from).normalize();if(oldDirection.lengthSq()<1e-9||target.lengthSq()<1e-9)return;
+  child=child||bone.children.find(node=>node.isBone);if(!child)return;const origin=bone.getWorldPosition(new THREE.Vector3());const oldDirection=child.getWorldPosition(new THREE.Vector3()).sub(origin).normalize();const target=to.clone().sub(from).normalize();if(oldDirection.lengthSq()<1e-9||target.lengthSq()<1e-9)return;
   const parentQ=bone.parent?.getWorldQuaternion(new THREE.Quaternion())||new THREE.Quaternion();const worldQ=new THREE.Quaternion().setFromUnitVectors(oldDirection,target).multiply(bone.getWorldQuaternion(new THREE.Quaternion()));const localQ=parentQ.invert().multiply(worldQ);bone.quaternion.slerp(localQ,0.5).normalize();
 }
 function allBones() {
@@ -1013,7 +987,7 @@ function selectBone(bone) {
   boneTarget = bone;
   activeAnimationTarget = bone;
   window.editorGizmo?.attach(bone);
-  window.editorGizmo?.setMode(activeTool === 'select' ? 'rotate' : activeTool);
+  const endRole=boneRole(bone.name);window.editorGizmo?.setMode(['hand','foot','head'].includes(endRole)?'translate':(activeTool === 'select' ? 'rotate' : activeTool));
   $('#timelineTrackName').textContent = bone.name || 'Bone';
   if (!animationMode) toggleAnimationMode();
   rebuildTimeline();
@@ -1114,7 +1088,7 @@ function toggleAnimationMode() {
   if (animationMode) {
     if (currentModel && !boneTarget) boneTarget = allBones()[0] || null;
     activeAnimationTarget = boneTarget || selected;
-    if (boneTarget) { window.editorGizmo?.attach(boneTarget); window.editorGizmo?.setMode('rotate'); }
+    if (boneTarget) { window.editorGizmo?.attach(boneTarget); window.editorGizmo?.setMode(['hand','foot','head'].includes(boneRole(boneTarget.name))?'translate':'rotate'); }
     rebuildTimeline();
     if (currentModel) refreshBoneList();
     updateBoneMarkers();
@@ -1156,7 +1130,8 @@ function captureKeyframe() {
   const target = activeAnimationTarget || boneTarget || selected;
   if (!target) { toast('Selecciona un objeto o hueso'); return; }
   const pose = keyframes.get(frame) || new Map();
-  pose.set(target.uuid, readTransform(target));
+  if(target.isBone){currentModel?.updateMatrixWorld(true);for(const bone of allBones())pose.set(bone.uuid,readTransform(bone));}
+  else pose.set(target.uuid, readTransform(target));
   keyframes.set(frame, pose);
   scheduleProjectSave();rebuildTimeline();
   updateFrameControls();
@@ -1182,7 +1157,7 @@ function interpolatePose(frame) {
     const node = nodes.get(uuid);
     if (!node) continue;
     const available = [...keyframes.entries()].filter(([, pose]) => pose.has(uuid)).sort((a, b) => a[0] - b[0]);
-    if (!available.length) continue;
+    if (available.length < 2) continue;
     let before = available.filter(([at]) => at <= frame).at(-1);
     let after = available.find(([at]) => at >= frame);
     before ||= available[0];
@@ -1293,9 +1268,9 @@ $('#home').addEventListener('click', returnToProjects);
 $('#enterCamera').addEventListener('click', () => enterCameraView(selected?.isCamera ? selected : viewCameraObject));
 $('#exitCamera').addEventListener('click', exitCameraView);
 $('#selectCameraView').addEventListener('click', () => { const cameras = objects.filter((item) => item.isCamera); if (!cameras.length) { toast('Añade una cámara desde Assets'); return; } const index = cameras.indexOf(viewCameraObject); viewCameraObject = cameras[(index + 1) % cameras.length]; toast(`Cámara activa: ${viewCameraObject.name}`); });
-$('#materialPanelToggle').addEventListener('click',()=>{const panel=$('#materialPanel'),workspace=$('#workspace');const opening=panel.hidden;panel.hidden=!opening;if(opening){$('#skyPanel').hidden=true;workspace.classList.remove('hide-objects','show-sky');workspace.classList.add('show-material');refreshMaterialPanel();}else{workspace.classList.remove('show-material','hide-objects');}});
+$('#materialPanelToggle').addEventListener('click',()=>{const panel=$('#materialPanel'),workspace=$('#workspace');const opening=panel.hidden;panel.hidden=!opening;if(opening){workspace.classList.remove('hide-objects');workspace.classList.add('show-material');refreshMaterialPanel();}else{workspace.classList.remove('show-material','hide-objects');}});
 $('#materialClose').addEventListener('click',()=>{$('#materialPanel').hidden=true;$('#workspace').classList.remove('show-material','hide-objects');});
-$('#objectsPanelToggle').addEventListener('click',()=>{const workspace=$('#workspace');$('#skyPanel').hidden=true;workspace.classList.remove('show-sky');if(workspace.classList.contains('show-material')){$('#materialPanel').hidden=true;workspace.classList.remove('show-material','hide-objects');return;}workspace.classList.toggle('hide-objects');});
+$('#objectsPanelToggle').addEventListener('click',()=>{const workspace=$('#workspace');if(workspace.classList.contains('show-material')){$('#materialPanel').hidden=true;workspace.classList.remove('show-material','hide-objects');return;}workspace.classList.toggle('hide-objects');});
 $('#materialMeshTarget').addEventListener('change',event=>{renderMaterialMesh=materialTargetsFor(selected).find(mesh=>mesh.uuid===event.target.value)||null;refreshMaterialPanel();});
 $('#materialColor').addEventListener('input',event=>editTargetMaterials(mat=>mat.color?.set(event.target.value)));
 $('#materialRoughness').min='0.12';$('#materialRoughness').max='0.94';
@@ -1326,11 +1301,6 @@ $('#exportScene').addEventListener('click', exportGlb);
 $('#importScene').addEventListener('click', async () => {if(Capacitor.isNativePlatform()){try{const file=await NativeRenderExport.readProjectFile();await importPickedFile(file.name,file.data);}catch(error){if(!String(error?.message||error).includes('canceled'))toast(`No se pudo abrir el archivo: ${error.message||error}`);}return;}fileInput.click();});
 $('#importProjectHome').addEventListener('click',async()=>{if(Capacitor.isNativePlatform()){try{const file=await NativeRenderExport.readProjectFile();const raw=atob(file.data);const bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));await importProjectData(JSON.parse(new TextDecoder().decode(bytes)),file.name);}catch(error){if(!String(error?.message||error).includes('canceled'))toast(`No se pudo importar el proyecto: ${error.message||error}`);}return;}$('#projectFileInput').click();});
 $('#projectFileInput').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;try{await importProjectData(JSON.parse(await file.text()),file.name);}catch(error){toast(`No se pudo importar el proyecto: ${error.message||error}`);}finally{e.target.value='';}});
-$('#skyPanelToggle').addEventListener('click',()=>{const panel=$('#skyPanel'),workspace=$('#workspace');const opening=panel.hidden;panel.hidden=!opening;if(opening){$('#materialPanel').hidden=true;workspace.classList.remove('hide-objects','show-material');workspace.classList.add('show-sky');$('#skyPreset').value=skyState.preset;$('#skyTime').value=skyState.timeOfDay;$('#skyTimeValue').value=`${String(Math.floor(skyState.timeOfDay)).padStart(2,'0')}:${String(Math.round((skyState.timeOfDay%1)*60)).padStart(2,'0')}`;}else workspace.classList.remove('show-sky');});
-$('#skyClose').addEventListener('click',()=>{$('#skyPanel').hidden=true;$('#workspace').classList.remove('show-sky');});
-$('#skyApply').addEventListener('click',()=>{skyState.preset=$('#skyPreset').value;applySkyState(skyState);toast(`Cielo aplicado: ${skyState.preset}`);});
-let skyUpdateTimer=null;$('#skyTime').addEventListener('input',e=>{skyState.timeOfDay=Number(e.target.value);const t=skyState.timeOfDay;$('#skyTimeValue').value=`${String(Math.floor(t)).padStart(2,'0')}:${String(Math.round((t%1)*60)).padStart(2,'0')}`;sun.intensity=t<6||t>19?.12:2.6;clearTimeout(skyUpdateTimer);skyUpdateTimer=setTimeout(()=>applySkyState(skyState),180);});
-$('#skyPreset').addEventListener('change',e=>{skyState.preset=e.target.value;applySkyState(skyState);});
 fileInput.addEventListener('change', () => { importFile(fileInput.files?.[0]); fileInput.value = ''; });
 $('#gridToggle').addEventListener('click', () => { gridVisible = !gridVisible; grid.visible = gridVisible; });
 $('#frame').addEventListener('click', () => { orbit.target.set(0, 0.6, 0); camera.position.set(5, 4, 7); orbit.update(); });
