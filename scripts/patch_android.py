@@ -188,9 +188,6 @@ public class RenderExportPlugin extends Plugin {{
   public void abortVideo(PluginCall call) {{ cleanupVideo(); JSObject ret=new JSObject();ret.put("aborted",true);call.resolve(ret); }}
 
   @PluginMethod
-  public void abortVideo(PluginCall call) {{ cleanupVideo(); JSObject ret=new JSObject();ret.put("aborted",true);call.resolve(ret); }}
-
-  @PluginMethod
   public void addVideoFrame(PluginCall call) {{
     try {{
       if(videoEncoder==null) throw new IllegalStateException("MP4 no iniciado");
