@@ -4,17 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
   <meta name="theme-color" content="#292a2c">
-  <title>Editor 3D</title>
+  <title>Software Volumi3d</title>
 </head>
 <body>
   <div id="projectHome" class="project-home">
-    <header class="home-header"><div class="home-logo">⬡</div><div><b>Editor 3D</b><small>Proyectos</small></div><button id="createProject">＋ Nuevo proyecto</button></header>
+    <header class="home-header"><div class="home-logo" aria-label="Software Volumi3d"><span>Software</span><b>Volumi3d</b></div><div><b>Software Volumi3d</b><small>Proyectos</small></div><button id="createProject">＋ Nuevo proyecto</button></header>
     <section class="home-content"><div class="home-title"><h1>Mis proyectos</h1><p>Crea una escena nueva o retoma tu trabajo.</p><button id="importProjectHome">Importar proyecto guardado</button><input id="projectFileInput" type="file" accept=".json,.editor3d.json,application/json" hidden></div><div class="project-grid" id="projectGrid"></div><div class="empty-projects" id="emptyProjects"><div>▧</div><b>Aún no hay proyectos</b><span>Crea tu primer proyecto para empezar.</span><button id="createProjectEmpty">＋ Crear proyecto</button></div><div class="project-dialog" id="projectDialog" hidden><div class="project-dialog-card"><b>Nuevo proyecto</b><span>Dale un nombre a tu escena 3D.</span><input id="projectNameInput" type="text" maxlength="40" placeholder="Mi proyecto 3D"><div><button id="cancelProject">Cancelar</button><button id="confirmProject">Crear proyecto</button></div></div></div></section>
   </div>
   <div id="app" hidden>
     <header class="topbar">
       <div class="brand-zone">
-        <button class="brand" id="home" title="Editor 3D"><span class="logo">⬡</span></button>
+        <button class="brand" id="home" title="Software Volumi3d"><span class="logo"><small>Software</small><b>Volumi3d</b></span></button>
         <button id="save" title="Guardar proyecto completo como archivo en Documents">Guardar proyecto</button>
         <button id="importScene" title="Importar escena">▧</button>
         <button id="exportScene" title="Exportar GLB">⇧</button>
@@ -77,7 +77,7 @@
         </section>
       </aside>
     </main>
-    <footer><span>Editor 3D</span><span id="status">Listo</span></footer>
+    <footer><span>Software Volumi3d</span><span id="status">Listo</span></footer>
     <input id="fileInput" type="file" accept=".json,.glb,.gltf,model/gltf-binary,model/gltf+json" hidden>
   </div>
   <script type="module" src="/src/main.js"></script>
