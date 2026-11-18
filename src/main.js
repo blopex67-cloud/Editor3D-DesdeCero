@@ -17,7 +17,7 @@ import '../style.css';
 const $ = (selector) => document.querySelector(selector);
 const container = $('#scene');
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#501c23');
+scene.background = new THREE.Color('#000000');
 const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 500);
 camera.position.set(5, 4, 7);
 let renderer;
@@ -133,11 +133,7 @@ scene.add(sun);
 const grid = new THREE.GridHelper(20, 40, 0x96999d, 0x606266);
 grid.position.y = -0.01;
 scene.add(grid);
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: '#292a2c', roughness: 0.32, metalness: 0.06 }));
-ground.rotation.x = -Math.PI / 2;
-ground.position.y = -0.025;
-ground.receiveShadow = true;
-scene.add(ground);
+// No gray floor plane: the black background and standard editor grid are the workspace floor.
 // Broad, neutral environment fill keeps PBR materials visible across the roughness range.
 const environmentGenerator=new THREE.PMREMGenerator(renderer);
 const environmentScene=new RoomEnvironment();
