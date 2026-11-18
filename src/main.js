@@ -12,12 +12,14 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality } from 'mediabunny';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 const NativeRenderExport = registerPlugin('RenderExport');
+let skyMesh=null,skyAnimationTime=0;
+let skyState={preset:'day',movingClouds:false,cloudSpeed:0.6,timeOfDay:14};
 import '../style.css';
 
 const $ = (selector) => document.querySelector(selector);
 const container = $('#scene');
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#3d3b38');
+scene.background = new THREE.Color('#5f87a3');
 const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 500);
 camera.position.set(5, 4, 7);
 let renderer;
@@ -144,6 +146,17 @@ const environmentScene=new RoomEnvironment();
 scene.environment=environmentGenerator.fromScene(environmentScene,0.04).texture;
 scene.environmentIntensity=0.85;
 environmentGenerator.dispose();
+function createSky(){
+  const material=new THREE.ShaderMaterial({side:THREE.BackSide,depthWrite:false,depthTest:false,uniforms:{uTime:{value:0},uPreset:{value:0},uClouds:{value:0},uSpeed:{value:0.6},uHour:{value:14}},vertexShader:`varying vec2 vUv;varying vec3 vDir;void main(){vUv=uv;vDir=normalize(position);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,fragmentShader:`varying vec2 vUv;varying vec3 vDir;uniform float uTime;uniform float uPreset;uniform float uClouds;uniform float uSpeed;uniform float uHour;float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453123);}float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);return mix(mix(hash(i),hash(i+vec2(1.,0.)),f.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),f.x),f.y);}float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<5;i++){v+=a*noise(p);p=p*2.03+13.7;a*=.5;}return v;}void main(){float h=clamp(vUv.y,0.,1.);float night=step(1.5,uPreset)*step(uPreset,2.5);float sunset=step(.5,uPreset)*step(uPreset,1.5);float overcast=step(2.5,uPreset)*step(uPreset,3.5);float hourNight=1.-smoothstep(5.5,7.5,uHour)+smoothstep(18.0,20.5,uHour);night=max(night,hourNight);vec3 dayTop=vec3(.10,.43,.78),dayHorizon=vec3(.68,.83,.96);vec3 duskTop=vec3(.15,.20,.43),duskHorizon=vec3(1.,.40,.17);vec3 nightTop=vec3(.008,.018,.07),nightHorizon=vec3(.045,.085,.19);vec3 top=mix(dayTop,duskTop,sunset);vec3 horizon=mix(dayHorizon,duskHorizon,sunset);top=mix(top,nightTop,night);horizon=mix(horizon,nightHorizon,night);vec3 sky=mix(horizon,top,smoothstep(.02,.88,h));float sunY=clamp((uHour-6.)/12.,0.,1.);vec2 sunUv=vec2(.72,.22+.65*sin(sunY*3.14159));float sun=1.-smoothstep(.012,.035,length(vUv-sunUv));sky=mix(sky,vec3(1.,.84,.58),sun*(1.-night));float cloudMix=max(uClouds,overcast*.55);if(cloudMix>.01){vec2 p=vUv*vec2(8.,3.7)+vec2(uTime*uSpeed*.008,0.);float cloud=fbm(p);float cloudMask=smoothstep(.54,.76,cloud);sky=mix(sky,mix(vec3(.93,.96,1.),vec3(.43,.50,.61),overcast),cloudMask*cloudMix*.78);}float stars=step(.996,hash(floor(vUv*vec2(180.,85.))))*(1.-smoothstep(.12,.42,h))*night;sky+=vec3(.75,.84,1.)*stars*(.7+.3*sin(uTime*1.5+hash(floor(vUv*300.))*6.));gl_FragColor=vec4(sky,1.);}`});
+  skyMesh=new THREE.Mesh(new THREE.SphereGeometry(150,32,20),material);skyMesh.name='Cielo procedural';skyMesh.renderOrder=-1000;skyMesh.frustumCulled=false;scene.add(skyMesh);
+}
+createSky();
+function applySkyState(state={},persist=true){
+  skyState={...skyState,...state};const presets={day:0,sunset:1,night:2,cloudy:3};const preset=skyState.preset||'day';
+  if(skyMesh){skyMesh.material.uniforms.uPreset.value=presets[preset]??0;skyMesh.material.uniforms.uClouds.value=skyState.movingClouds?(preset==='cloudy'?.8:.34):(preset==='cloudy'?.72:.0);skyMesh.material.uniforms.uSpeed.value=skyState.movingClouds?(Number(skyState.cloudSpeed)||.6):0;skyMesh.material.uniforms.uHour.value=Number(skyState.timeOfDay??14);}
+  const t=Number(skyState.timeOfDay??14),night=preset==='night'||t<6||t>19;sun.position.set(Math.cos((t-12)*Math.PI/12)*9,Math.sin((t-6)*Math.PI/12)*10,5);sun.intensity=night ? 0.12 : (preset==='sunset'?1.55:preset==='cloudy'?1.55:2.6);sun.color.set(night?'#8aaaff':preset==='sunset'?'#ffbd83':'#ffffff');scene.environmentIntensity=night ? 0.22 : (preset==='sunset' ? 0.65 : preset==='cloudy' ? 0.58 : 0.85);const hemi=scene.children.find(x=>x.isHemisphereLight);if(hemi){hemi.intensity=night ? 0.28 : preset==='cloudy' ? 0.72 : 1.05;hemi.color.set(night?'#6a83bd':'#fff5e8');}
+  $('#skyTime').value=String(skyState.timeOfDay??14);$('#skyTimeValue').value=`${String(Math.floor(t)).padStart(2,'0')}:${String(Math.round((t%1)*60)).padStart(2,'0')}`;$('#skyPreset').value=preset;$('#skyMovingClouds').checked=!!skyState.movingClouds;$('#skyCloudSpeed').value=String(skyState.cloudSpeed??.6);$('#skyCloudSpeedValue').value=Number(skyState.cloudSpeed??.6).toFixed(1);if(persist)scheduleProjectSave();
+}
 
 const composer = new EffectComposer(renderer);
 composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25)); // Lower-resolution post FX for mobile GPUs.
@@ -526,7 +539,7 @@ function removeSelected() {
 function snapshot() {
   const modelPoses=[];for(const root of objects.filter(item=>item.userData.kind==='Modelo'))root.traverse(node=>{if(!node.isBone)return;const path=[];let current=node;while(current&&current!==root){const parent=current.parent;if(!parent)break;path.unshift(parent.children.indexOf(current));current=parent;}modelPoses.push({owner:root.userData.assetKey||root.name,path,position:node.position.toArray(),quaternion:node.quaternion.toArray(),scale:node.scale.toArray()});});
   const animationData={loop:animationLoop,keyframes:[...keyframes.entries()].map(([frame,pose])=>({frame,targets:[...pose.entries()].map(([uuid,transform])=>{const node=[...objects,...allBones()].find(item=>item.uuid===uuid);if(!node)return null;let root=node;while(root.parent&&!objects.includes(root))root=root.parent;const objectIndex=objects.indexOf(root),path=[];let current=node;while(current!==root&&current.parent){path.unshift(current.parent.children.indexOf(current));current=current.parent;}return{name:node.name||'',kind:node.isBone?'bone':'object',owner:node.isBone?(root.name||''):node.userData?.kind||'',objectIndex,path,transform};}).filter(Boolean)}))};
-  return { format: 'editor-3d-scene', version: 7, renderSettings:{postLook:$('#postLook')?.value||'cinematic',postEnabled,gridVisible,activeTool,cameraMode,activeCameraName:cameraMode?activeCamera?.name||'':viewCameraObject?.name||'',selectedName:selected?.name||'',currentFrame}, animation:animationData, modelPoses, objects: objects.map((object) => ({
+  return { format: 'editor-3d-scene', version: 8, renderSettings:{postLook:$('#postLook')?.value||'cinematic',postEnabled,gridVisible,activeTool,cameraMode,sky:{...skyState},activeCameraName:cameraMode?activeCamera?.name||'':viewCameraObject?.name||'',selectedName:selected?.name||'',currentFrame}, animation:animationData, modelPoses, objects: objects.map((object) => ({
     name: object.name, kind: object.userData.kind || 'Cubo', assetKey: object.userData.kind === 'Modelo' ? (object.userData.assetKey || null) : undefined, position: object.position.toArray(),
     rotation: object.rotation.toArray(), scale: object.scale.toArray(),
     color: `#${object.material?.color?.getHexString?.() || object.color?.getHexString?.() || 'ffffff'}`,
@@ -756,8 +769,21 @@ async function chooseRenderFolder() {
   $('#renderStatus').textContent = 'Este navegador no admite elegir una carpeta; el archivo exportado se descargará a Descargas.';
   toast('Elige carpeta no está disponible en este navegador');
 }
+async function imageToStoredBlob(texture){
+  const image=texture?.image;if(!image||!image.width||!image.height)throw new Error('La textura todavía no terminó de cargar');
+  const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;const ctx=canvas.getContext('2d');if(!ctx)throw new Error('No se pudo leer el mapa de textura');ctx.drawImage(image,0,0);
+  const type=texture.colorSpace===THREE.SRGBColorSpace?'image/webp':'image/png';return await new Promise((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(new Error('No se pudo empaquetar el mapa de textura')),type,type==='image/webp'?.9:undefined));
+}
+async function ensureMaterialTextureAssets(){
+  const mapDefs=[['map','baseTextureKey'],['roughnessMap','roughnessTextureKey'],['normalMap','normalTextureKey']];
+  for(const root of objects)for(const mesh of materialTargetsFor(root))for(const mat of materialListFor(mesh))for(const [mapKey,keyName] of mapDefs){
+    const texture=mat[mapKey];if(!texture)continue;let key=mat.userData?.[keyName],saved=key?await getTextureAsset(key):null;
+    if(!saved){key=`tex-${Date.now()}-${Math.random().toString(36).slice(2,9)}`;const blob=await imageToStoredBlob(texture);await storeTextureAsset(key,blob);mat.userData ||= {};mat.userData[keyName]=key;}
+  }
+}
 async function buildPortableProject(button=null){
-  saveCurrentProject();while(pendingTextureImports.size)await Promise.allSettled([...pendingTextureImports]);while(pendingModelImports.size)await Promise.allSettled([...pendingModelImports]);while(pendingAssetMigrations.size)await Promise.allSettled([...pendingAssetMigrations]);
+  while(pendingTextureImports.size)await Promise.allSettled([...pendingTextureImports]);while(pendingModelImports.size)await Promise.allSettled([...pendingModelImports]);while(pendingAssetMigrations.size)await Promise.allSettled([...pendingAssetMigrations]);
+  await ensureMaterialTextureAssets();saveCurrentProject();
   const data=snapshot();data.modelAssets=[];data.textureAssets=[];
   const modelKeys=[...new Set(objects.filter(item=>item.userData.kind==='Modelo'&&item.userData.assetKey).map(item=>item.userData.assetKey))];
   const textureKeys=new Set();for(const item of data.objects)for(const row of item.materials||[])for(const mat of row.materials||[])for(const k of ['baseTextureKey','roughnessTextureKey','normalTextureKey'])if(mat[k])textureKeys.add(mat[k]);
@@ -788,7 +814,7 @@ function restoreMaterialSnapshots(root, rows) {
   for(let i=0;i<Math.min(meshes.length,rows.length);i++){const mats=Array.isArray(meshes[i].material)?meshes[i].material:[meshes[i].material];const saved=rows[i].materials||[];for(let j=0;j<Math.min(mats.length,saved.length);j++){const mat=mats[j],state=saved[j];if(state.color)mat.color?.set(state.color);if('roughness'in mat)mat.roughness=THREE.MathUtils.clamp(Number.isFinite(state.roughness)?state.roughness:0.55,0.12,0.94);if(Number.isFinite(state.metalness)&&'metalness'in mat)mat.metalness=state.metalness;if(state.emissive)mat.emissive?.set(state.emissive);if(Number.isFinite(state.emissiveIntensity)&&'emissiveIntensity'in mat)mat.emissiveIntensity=state.emissiveIntensity;if(Number.isFinite(state.transmission)&&'transmission'in mat)mat.transmission=state.transmission;if(Number.isFinite(state.ior)&&'ior'in mat)mat.ior=state.ior;if(Number.isFinite(state.thickness)&&'thickness'in mat)mat.thickness=state.thickness;if(typeof state.transparent==='boolean')mat.transparent=state.transparent;if(Number.isFinite(state.opacity))mat.opacity=state.opacity;if(state.cubeOriginal){mat.userData ||= {};mat.userData.cubeOriginal={...state.cubeOriginal,color:new THREE.Color(`#${String(state.cubeOriginal.color||'ffffff').replace('#','')}`)};}if(state.editorShader)applyTextureShader(mat,state.editorShader);if(state.wetSurface){mat.userData ||= {};mat.userData.wetSurface=true;mat.userData.wetOriginal=state.wetOriginal||{roughness:mat.roughness??0.55,metalness:mat.metalness??0,envMapIntensity:1};}for(const [mapKey,keyName,legacyName] of [['map','baseTextureKey','baseTextureData'],['roughnessMap','roughnessTextureKey','roughnessTextureData'],['normalMap','normalTextureKey','normalTextureData']]){const assetKey=state[keyName];const legacy=state[legacyName];if(assetKey){mat.userData ||= {};mat.userData[keyName]=assetKey;getTextureAsset(assetKey).then(blob=>{if(!blob)return;const url=URL.createObjectURL(blob);new THREE.TextureLoader().load(url,texture=>{URL.revokeObjectURL(url);texture.colorSpace=mapKey==='map'?THREE.SRGBColorSpace:THREE.NoColorSpace;texture.wrapS=texture.wrapT=THREE.RepeatWrapping;mat[mapKey]=texture;mat.needsUpdate=true;},undefined,error=>{URL.revokeObjectURL(url);console.warn('Texture restore failed',error);});}).catch(error=>console.warn('Texture storage missing',assetKey,error));}else if(legacy){new THREE.TextureLoader().load(legacy,texture=>{texture.colorSpace=mapKey==='map'?THREE.SRGBColorSpace:THREE.NoColorSpace;mat[mapKey]=texture;mat.needsUpdate=true;});mat.userData ||= {};mat.userData[keyName]=null;const migration=fetch(legacy).then(r=>r.blob()).then(blob=>{const key=`tex-migrated-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;return storeTextureAsset(key,blob).then(()=>{mat.userData[keyName]=key;saveCurrentProject();});}).catch(error=>console.warn('Legacy texture migration failed',error));pendingAssetMigrations.add(migration);migration.finally(()=>pendingAssetMigrations.delete(migration));}}if(Array.isArray(state.normalScale)&&mat.normalScale)mat.normalScale.fromArray(state.normalScale);mat.needsUpdate=true;}}
 }
 async function loadScene(data) {
-  if(data.renderSettings){$('#postLook').value=data.renderSettings.postLook||'cinematic';postEnabled=!!data.renderSettings.postEnabled;$('#postToggle').classList.toggle('active',postEnabled);bloomPass.enabled=postEnabled;lightPostPass.enabled=postEnabled;gridVisible=data.renderSettings.gridVisible!==false;grid.visible=gridVisible;setTool(data.renderSettings.activeTool||'select');if(postEnabled)applyPostLook($('#postLook').value);}
+  if(data.renderSettings){if(data.renderSettings.sky)applySkyState(data.renderSettings.sky,false);$('#postLook').value=data.renderSettings.postLook||'cinematic';postEnabled=!!data.renderSettings.postEnabled;$('#postToggle').classList.toggle('active',postEnabled);bloomPass.enabled=postEnabled;lightPostPass.enabled=postEnabled;gridVisible=data.renderSettings.gridVisible!==false;grid.visible=gridVisible;setTool(data.renderSettings.activeTool||'select');if(postEnabled)applyPostLook($('#postLook').value);}
   if(Array.isArray(data?.textureAssets))for(const asset of data.textureAssets)if(asset?.key&&asset?.data){const blob=asset.data.startsWith('data:')?await(await fetch(asset.data)).blob():new Blob([Uint8Array.from(atob(asset.data),c=>c.charCodeAt(0))],{type:asset.type||'image/png'});await storeTextureAsset(asset.key,blob);}
   if (Array.isArray(data?.modelAssets)) for (const asset of data.modelAssets) if (asset?.key&&asset?.data) { const binary=atob(asset.data); const bytes=new Uint8Array(binary.length); for(let i=0;i<bytes.length;i++) bytes[i]=binary.charCodeAt(i); await storeModelAsset(asset.key,new Blob([bytes],{type:asset.type||'model/gltf-binary'})); }
   if (data?.format !== 'editor-3d-scene' || !Array.isArray(data.objects)) throw new Error('Archivo de escena no válido');
@@ -831,6 +857,27 @@ function addImportedClipControls(clips,mixer){
   clips.forEach((clip,index)=>{const play=document.createElement('button');play.textContent=`▶ ${clip.name||`Clip ${index+1}`}`;play.addEventListener('click',()=>{mixer.stopAllAction();importedMixer=mixer;importedAnimationAction=mixer.clipAction(clip);importedAnimationAction.reset().play();$('#animMode').dataset.clip='playing';scheduleProjectSave();toast(`Reproduciendo ${clip.name||`Clip ${index+1}`}`);});clipBox.append(play);});
   const own=document.createElement('button');own.textContent='✎ Crear animación propia';own.addEventListener('click',()=>stopImportedClipPreservingPose());clipBox.append(own);$('#animationPanel').append(clipBox);
 }
+function addLoadedModel(gltf,fileName='Modelo GLB'){
+  const model=gltf.scene||gltf.scenes?.[0];if(!model)throw new Error('El GLB no contiene una escena');
+  model.name=safeName(fileName.replace(/\.(glb|gltf)$/i,''));model.userData.kind='Modelo';model.traverse(child=>{if(child.isMesh){child.castShadow=true;child.receiveShadow=true;for(const mat of materialListFor(child)){mat.needsUpdate=true;}}});
+  if(importedAnimationAction){importedAnimationAction.stop();importedAnimationAction=null;}
+  model.userData.assetKey=`model-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;scene.add(model);objects.push(model);currentModel=model;boneTarget=null;select(model);makeBoneMarkers(model);importedClips=gltf.animations||[];
+  const modelSave=persistModelAsset(model,importedClips);pendingModelImports.add(modelSave);modelSave.then(()=>{saveCurrentProject();toast('GLB guardado con sus materiales y animaciones');}).catch(error=>{console.error(error);toast(`Modelo visible, pero no se pudo conservar completo: ${error.message||error}`);}).finally(()=>pendingModelImports.delete(modelSave));
+  importedMixer=importedClips.length?new THREE.AnimationMixer(model):null;if(importedMixer)addImportedClipControls(importedClips,importedMixer);emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();rebuildTimeline();updateStatus();toast(`GLB importado · ${model.name} · ${allBones().length} huesos`);saveCurrentProject();
+}
+function importGlbBuffer(buffer,fileName='Modelo.glb'){
+  const array=buffer instanceof ArrayBuffer?buffer:buffer.buffer.slice(buffer.byteOffset,buffer.byteOffset+buffer.byteLength);
+  new GLTFLoader().parse(array,'',(gltf)=>{try{addLoadedModel(gltf,fileName);}catch(error){console.error(error);toast(`GLB leído, pero no se pudo añadir: ${error.message||error}`);}},error=>{console.error(error);toast(`No se pudo leer el GLB: ${error.message||error}`);});
+}
+async function importProjectData(data,fileName='Proyecto'){
+  if(data?.format!=='editor-3d-scene'||!Array.isArray(data.objects))throw new Error('El archivo no parece un proyecto de Editor 3D.');
+  const name=safeName(data.projectName||fileName.replace(/\.editor3d\.json$|\.json$/i,''));const item={id:`p-${Date.now()}`,name,createdAt:Date.now(),updatedAt:Date.now(),scene:data};const projects=projectList();projects.unshift(item);writeProjectList(projects);renderProjectCards();currentProjectId=item.id;localStorage.setItem('editor3d:last-project',item.id);$('#projectHome').hidden=true;$('#app').hidden=false;await loadScene(data);$('#home').title=name;toast(`Proyecto importado: ${name}`);
+}
+async function importPickedFile(name,base64){
+  const binary=atob(base64),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
+  if(/\.glb$/i.test(name)||(bytes.length>4&&bytes[0]===0x67&&bytes[1]===0x6c&&bytes[2]===0x54&&bytes[3]===0x46)){importGlbBuffer(bytes,name);return;}
+  const text=new TextDecoder().decode(bytes);const data=JSON.parse(text);if(data?.format==='editor-3d-scene')await importProjectData(data,name);else await loadScene(data);
+}
 function importFile(file) {
   if (!file) return;
   lightingBaked=false;
@@ -838,22 +885,8 @@ function importFile(file) {
     file.text().then((text) => loadScene(JSON.parse(text))).catch((error) => toast(error.message || 'No se pudo abrir la escena'));
     return;
   }
-  const url = URL.createObjectURL(file);
-  new GLTFLoader().load(url, (gltf) => {
-    const model = gltf.scene;
-    model.name = safeName(file.name.replace(/\.(glb|gltf)$/i, ''));
-    model.userData.kind = 'Modelo';
-    model.traverse((child) => { if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; } });
-    emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();
-    if (importedAnimationAction) { importedAnimationAction.stop(); importedAnimationAction = null; }
-    model.userData.assetKey = `model-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
-    scene.add(model); objects.push(model); currentModel = model; boneTarget = null; select(model); makeBoneMarkers(model);
-    importedClips = gltf.animations || [];
-    const modelSave=persistModelAsset(model,importedClips);pendingModelImports.add(modelSave);modelSave.then(()=>{saveCurrentProject();toast('Modelo y animaciones guardados en el proyecto');}).catch(error=>{console.error(error);toast('No se pudo guardar el modelo importado');}).finally(()=>pendingModelImports.delete(modelSave));
-    importedMixer = importedClips.length ? new THREE.AnimationMixer(model) : null;
-    if(importedMixer)addImportedClipControls(importedClips,importedMixer);
-    rebuildTimeline(); updateStatus(); toast(allBones().length ? `Modelo importado · ${allBones().length} huesos · ${importedClips.length} clips` : 'Modelo importado · sin armature'); URL.revokeObjectURL(url);
-  }, undefined, () => { URL.revokeObjectURL(url); toast('No se pudo importar el modelo'); });
+  if(!/\.(glb|gltf)$/i.test(file.name)){toast('Formato no compatible: usa un archivo .glb, .gltf o proyecto .json');return;}
+  const url=URL.createObjectURL(file);new GLTFLoader().load(url,gltf=>{try{addLoadedModel(gltf,file.name);}catch(error){console.error(error);toast(`No se pudo importar el modelo: ${error.message||error}`);}finally{URL.revokeObjectURL(url);}},event=>{if(event.total)$('#status').textContent=`Leyendo modelo ${Math.round(event.loaded/event.total*100)}%`;},error=>{URL.revokeObjectURL(url);console.error(error);toast(`No se pudo importar el modelo: ${error.message||error}`);});
 }
 function exportGlb() {
   const root = new THREE.Group();
@@ -1248,9 +1281,9 @@ $('#home').addEventListener('click', returnToProjects);
 $('#enterCamera').addEventListener('click', () => enterCameraView(selected?.isCamera ? selected : viewCameraObject));
 $('#exitCamera').addEventListener('click', exitCameraView);
 $('#selectCameraView').addEventListener('click', () => { const cameras = objects.filter((item) => item.isCamera); if (!cameras.length) { toast('Añade una cámara desde Assets'); return; } const index = cameras.indexOf(viewCameraObject); viewCameraObject = cameras[(index + 1) % cameras.length]; toast(`Cámara activa: ${viewCameraObject.name}`); });
-$('#materialPanelToggle').addEventListener('click',()=>{const panel=$('#materialPanel'),workspace=$('#workspace');const opening=panel.hidden;panel.hidden=!opening;if(opening){workspace.classList.remove('hide-objects');workspace.classList.add('show-material');refreshMaterialPanel();}else{workspace.classList.remove('show-material','hide-objects');}});
+$('#materialPanelToggle').addEventListener('click',()=>{const panel=$('#materialPanel'),workspace=$('#workspace');const opening=panel.hidden;panel.hidden=!opening;if(opening){$('#skyPanel').hidden=true;workspace.classList.remove('hide-objects','show-sky');workspace.classList.add('show-material');refreshMaterialPanel();}else{workspace.classList.remove('show-material','hide-objects');}});
 $('#materialClose').addEventListener('click',()=>{$('#materialPanel').hidden=true;$('#workspace').classList.remove('show-material','hide-objects');});
-$('#objectsPanelToggle').addEventListener('click',()=>{const workspace=$('#workspace');if(workspace.classList.contains('show-material')){$('#materialPanel').hidden=true;workspace.classList.remove('show-material','hide-objects');return;}workspace.classList.toggle('hide-objects');});
+$('#objectsPanelToggle').addEventListener('click',()=>{const workspace=$('#workspace');$('#skyPanel').hidden=true;workspace.classList.remove('show-sky');if(workspace.classList.contains('show-material')){$('#materialPanel').hidden=true;workspace.classList.remove('show-material','hide-objects');return;}workspace.classList.toggle('hide-objects');});
 $('#materialMeshTarget').addEventListener('change',event=>{renderMaterialMesh=materialTargetsFor(selected).find(mesh=>mesh.uuid===event.target.value)||null;refreshMaterialPanel();});
 $('#materialColor').addEventListener('input',event=>editTargetMaterials(mat=>mat.color?.set(event.target.value)));
 $('#materialRoughness').min='0.12';$('#materialRoughness').max='0.94';
@@ -1259,9 +1292,9 @@ $('#materialMetalness').addEventListener('input',event=>{const value=Number(even
 $('#materialEmissive').addEventListener('input',event=>editTargetMaterials(mat=>mat.emissive?.set(event.target.value)));
 $('#materialEmissionPower').addEventListener('input',event=>{const value=Number(event.target.value);$('#emissionValue').value=value.toFixed(2);editTargetMaterials(mat=>{if(mat.emissive)mat.emissiveIntensity=value;});});
 $('#materialShader').addEventListener('change',event=>editTargetMaterials(mat=>applyTextureShader(mat,event.target.value)));
-$('#baseTextureFile').addEventListener('change',e=>importMaterialMap(e.target.files?.[0],'Textura base','map','baseTextureData',THREE.SRGBColorSpace));
-$('#roughnessTextureFile').addEventListener('change',e=>importMaterialMap(e.target.files?.[0],'Mapa roughness','roughnessMap','roughnessTextureData',THREE.NoColorSpace));
-$('#normalTextureFile').addEventListener('change',e=>importMaterialMap(e.target.files?.[0],'Mapa normal','normalMap','normalTextureData',THREE.NoColorSpace));
+$('#baseTextureFile').addEventListener('change',e=>importMaterialMap(e.target.files?.[0],'Textura base','map','baseTextureKey',THREE.SRGBColorSpace));
+$('#roughnessTextureFile').addEventListener('change',e=>importMaterialMap(e.target.files?.[0],'Mapa roughness','roughnessMap','roughnessTextureKey',THREE.NoColorSpace));
+$('#normalTextureFile').addEventListener('change',e=>importMaterialMap(e.target.files?.[0],'Mapa normal','normalMap','normalTextureKey',THREE.NoColorSpace));
 $('#normalStrength').addEventListener('input',e=>{const value=Number(e.target.value);$('#normalStrengthValue').value=value.toFixed(2);editTargetMaterials(mat=>mat.normalScale?.set(value,value));});
 $('#wetFloor').addEventListener('click',applyWetFloor);$('#applyCubeFinish').addEventListener('click',applyCubeFinish);
 $('#bakeLighting').addEventListener('click',()=>{lightingBaked=false;prepareRenderLighting();});
@@ -1278,7 +1311,16 @@ $('#duplicate').addEventListener('click',duplicateSelected);
 $('#addMenu')?.addEventListener('click', () => addObject('Cubo'));
 $('#save').addEventListener('click', saveScene);
 $('#exportScene').addEventListener('click', exportGlb);
-$('#importScene').addEventListener('click', async () => {if(Capacitor.isNativePlatform()){try{const file=await NativeRenderExport.readProjectFile();const binary=atob(file.data),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);await loadScene(JSON.parse(new TextDecoder().decode(bytes)));toast(`Proyecto ${file.name} importado`);}catch(error){if(!String(error?.message||error).includes('canceled'))toast(`No se pudo abrir el proyecto: ${error.message||error}`);}return;}fileInput.click();});
+$('#importScene').addEventListener('click', async () => {if(Capacitor.isNativePlatform()){try{const file=await NativeRenderExport.readProjectFile();await importPickedFile(file.name,file.data);}catch(error){if(!String(error?.message||error).includes('canceled'))toast(`No se pudo abrir el archivo: ${error.message||error}`);}return;}fileInput.click();});
+$('#importProjectHome').addEventListener('click',async()=>{if(Capacitor.isNativePlatform()){try{const file=await NativeRenderExport.readProjectFile();const raw=atob(file.data);const bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));await importProjectData(JSON.parse(new TextDecoder().decode(bytes)),file.name);}catch(error){if(!String(error?.message||error).includes('canceled'))toast(`No se pudo importar el proyecto: ${error.message||error}`);}return;}$('#projectFileInput').click();});
+$('#projectFileInput').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;try{await importProjectData(JSON.parse(await file.text()),file.name);}catch(error){toast(`No se pudo importar el proyecto: ${error.message||error}`);}finally{e.target.value='';}});
+$('#skyPanelToggle').addEventListener('click',()=>{const panel=$('#skyPanel'),workspace=$('#workspace');const opening=panel.hidden;panel.hidden=!opening;if(opening){$('#materialPanel').hidden=true;workspace.classList.remove('hide-objects','show-material');workspace.classList.add('show-sky');$('#skyPreset').value=skyState.preset;$('#skyMovingClouds').checked=skyState.movingClouds;$('#skyCloudSpeed').value=skyState.cloudSpeed;$('#skyTime').value=skyState.timeOfDay;$('#skyCloudSpeedValue').value=Number(skyState.cloudSpeed).toFixed(1);$('#skyTimeValue').value=`${String(Math.floor(skyState.timeOfDay)).padStart(2,'0')}:${String(Math.round((skyState.timeOfDay%1)*60)).padStart(2,'0')}`;}else workspace.classList.remove('show-sky');});
+$('#skyClose').addEventListener('click',()=>{$('#skyPanel').hidden=true;$('#workspace').classList.remove('show-sky');});
+$('#skyApply').addEventListener('click',()=>{skyState.preset=$('#skyPreset').value;skyState.movingClouds=$('#skyMovingClouds').checked;skyState.cloudSpeed=Number($('#skyCloudSpeed').value);applySkyState(skyState);toast(`Cielo aplicado: ${skyState.preset}`);});
+$('#skyMovingClouds').addEventListener('change',e=>{skyState.movingClouds=e.target.checked;applySkyState(skyState);});
+$('#skyCloudSpeed').addEventListener('input',e=>{skyState.cloudSpeed=Number(e.target.value);$('#skyCloudSpeedValue').value=skyState.cloudSpeed.toFixed(1);applySkyState(skyState);});
+$('#skyTime').addEventListener('input',e=>{skyState.timeOfDay=Number(e.target.value);applySkyState(skyState);});
+$('#skyPreset').addEventListener('change',e=>{skyState.preset=e.target.value;applySkyState(skyState);});
 fileInput.addEventListener('change', () => { importFile(fileInput.files?.[0]); fileInput.value = ''; });
 $('#gridToggle').addEventListener('click', () => { gridVisible = !gridVisible; grid.visible = gridVisible; });
 $('#frame').addEventListener('click', () => { orbit.target.set(0, 0.6, 0); camera.position.set(5, 4, 7); orbit.update(); });
@@ -1341,7 +1383,7 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
 function frame() {
   requestAnimationFrame(frame);
   orbit.update();
-  lightPostPass.uniforms.time.value += 0.016;
+  lightPostPass.uniforms.time.value += 0.016;skyAnimationTime+=0.016;if(skyMesh)skyMesh.material.uniforms.uTime.value=skyAnimationTime;
   if (importedMixer && importedAnimationAction) importedMixer.update(1 / 60);
   if (currentModel && animationMode) updateBoneMarkers();
 
