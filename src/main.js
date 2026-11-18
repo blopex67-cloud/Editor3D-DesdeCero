@@ -84,16 +84,16 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 try {
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.shadowMap.enabled = true;
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: false });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
+  renderer.shadowMap.enabled = false;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.shadowMap.autoUpdate = false;
   renderer.shadowMap.needsUpdate = false;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.2;
-  renderer.setClearColor('#3d3b38', 1);
+  renderer.toneMappingExposure = 0.78;
+  renderer.setClearColor('#000000', 1);
   container.append(renderer.domElement);
   orbit = new OrbitControls(camera, renderer.domElement);
   orbit.enableDamping = true;
@@ -144,7 +144,7 @@ const composer = new EffectComposer(renderer);
 composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25)); // Lower-resolution post FX for mobile GPUs.
 const sceneRenderPass = new RenderPass(scene, camera);
 composer.addPass(sceneRenderPass);
-const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.30, 0.55, 0.72);
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.035, 0.035, 0.98);
 composer.addPass(bloomPass);
 const lightPostPass = new ShaderPass({
   uniforms: { tDiffuse: { value: null }, time: { value: 0 }, grain: { value: 0.012 }, vignette: { value: 0.22 }, contrast: { value: 1.16 }, saturation: { value: 0.92 }, warmth: { value: 0.035 } },
@@ -167,6 +167,10 @@ const pendingTextureImports = new Set();
 const pendingModelImports = new Set();
 const pendingAssetMigrations = new Set();
 let emissiveBloomActive = false;
+let renderCaptureActive=false;
+let realisticMode=true;let savedEnvironment=scene.environment;let savedExposure=renderer.toneMappingExposure;
+let animationTrackCache=null;
+let sharedBoneMarkerGeometry=null;
 function toast(message) {
   const element = $('#toast');
   element.textContent = message;
@@ -334,7 +338,7 @@ function field(label, axis, value, kind) {
 function materialTargetsFor(object) { const result=[]; if(object?.isMesh)result.push(object); else object?.traverse?.(node=>{if(node.isMesh)result.push(node);}); return result; }
 function materialListFor(mesh) { return (Array.isArray(mesh?.material)?mesh.material:[mesh?.material]).filter(Boolean); }
 function hasEmissiveMeshes(){return objects.some(object=>{let found=false;object.traverse?.(node=>{if(node.isMesh&&materialListFor(node).some(mat=>mat.emissive&&mat.emissiveIntensity>0))found=true;});return found;});}
-function usePostPipeline(){bloomPass.enabled=postEnabled||emissiveBloomActive;lightPostPass.enabled=postEnabled;return postEnabled||emissiveBloomActive;}
+function usePostPipeline(){const enabled=realisticMode&&(postEnabled||emissiveBloomActive);bloomPass.enabled=enabled&&(postEnabled||emissiveBloomActive);lightPostPass.enabled=realisticMode&&postEnabled;return enabled;}
 function applyTextureShader(material, mode) {
   material.userData ||= {}; material.userData.editorShader=mode; material.wireframe=mode==='wire';
   const key=`editor-style-${mode}`; material.customProgramCacheKey=()=>key;
@@ -343,6 +347,14 @@ function applyTextureShader(material, mode) {
     shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>\nfloat styleLum=dot(diffuseColor.rgb,vec3(0.2126,0.7152,0.0722));\n${mode==='toon'?'float band=floor(styleLum*4.0)/3.0; diffuseColor.rgb*=max(0.28,band);':mode==='sketch'?'float hatch=step(0.5,fract((gl_FragCoord.x+gl_FragCoord.y)*0.18)); float ink=smoothstep(0.18,0.68,styleLum); diffuseColor.rgb*=mix(vec3(0.28),vec3(1.0),mix(ink,hatch,0.55));':mode==='dots'?'float dotPattern=step(0.42,length(fract(gl_FragCoord.xy*0.075)-0.5)); diffuseColor.rgb*=mix(vec3(0.12),vec3(1.0),dotPattern);':mode==='notepad'?'float lines=step(0.82,fract(gl_FragCoord.y*0.045)); diffuseColor.rgb=mix(diffuseColor.rgb,vec3(0.08,0.20,0.42),lines*0.75);':mode==='hope'?'diffuseColor.rgb=mix(diffuseColor.rgb,vec3(0.15,0.95,1.0),0.24+0.22*sin(gl_FragCoord.y*0.035));':mode==='wire'?'float wireLine=step(0.90,fract(gl_FragCoord.x*0.075))*step(0.90,fract(gl_FragCoord.y*0.075)); diffuseColor.rgb=mix(diffuseColor.rgb,vec3(0.05,0.85,1.0),wireLine*0.8);':'diffuseColor.rgb=mix(diffuseColor.rgb,vec3(0.92,0.62,0.30),0.18);'}\n`);
   }; material.needsUpdate=true;
 }
+let colorWheelState={h:0,s:0,v:1};
+function rgbHexToHsv(hex){const n=parseInt(String(hex||'#ffffff').replace('#',''),16),r=((n>>16)&255)/255,g=((n>>8)&255)/255,b=(n&255)/255,max=Math.max(r,g,b),min=Math.min(r,g,b),d=max-min;let h=0;if(d){if(max===r)h=((g-b)/d)%6;else if(max===g)h=(b-r)/d+2;else h=(r-g)/d+4;h=(h*60+360)%360;}return{h,s:max?d/max:0,v:max};}
+function hsvToColorHex(h,s,v){h=((h%360)+360)%360;s=THREE.MathUtils.clamp(s,0,1);v=THREE.MathUtils.clamp(v,0,1);const c=v*s,x=c*(1-Math.abs((h/60)%2-1)),m=v-c;let r=0,g=0,b=0;if(h<60){r=c;g=x;}else if(h<120){r=x;g=c;}else if(h<180){g=c;b=x;}else if(h<240){g=x;b=c;}else if(h<300){r=x;b=c;}else{r=c;b=x;}return '#'+[r,g,b].map(k=>Math.round((k+m)*255).toString(16).padStart(2,'0')).join('');}
+let wheelRingPixels=null;
+function drawMaterialColorWheel(){const canvas=$('#materialColorWheel');if(!canvas)return;const size=canvas.width,ctx=canvas.getContext('2d');if(!ctx)return;if(!wheelRingPixels){const ring=document.createElement('canvas');ring.width=ring.height=size;const rc=ring.getContext('2d'),image=rc.createImageData(size,size),cx=(size-1)/2,cy=cx,outer=size*.47,inner=size*.355,inner2=inner*inner,outer2=outer*outer;for(let y=0;y<size;y++)for(let x=0;x<size;x++){const dx=x-cx,dy=y-cy,r2=dx*dx+dy*dy;if(r2>=inner2&&r2<=outer2){const hue=(Math.atan2(dy,dx)*180/Math.PI+360)%360,color=hsvToColorHex(hue,1,1),at=(y*size+x)*4;image.data[at]=parseInt(color.slice(1,3),16);image.data[at+1]=parseInt(color.slice(3,5),16);image.data[at+2]=parseInt(color.slice(5,7),16);image.data[at+3]=255;}}rc.putImageData(image,0,0);wheelRingPixels=rc.getImageData(0,0,size,size);}ctx.clearRect(0,0,size,size);ctx.putImageData(wheelRingPixels,0,0);const cx=size/2,cy=size/2,inner=size*.34,hueHex=hsvToColorHex(colorWheelState.h,1,1);ctx.beginPath();ctx.arc(cx,cy,inner,0,Math.PI*2);ctx.fillStyle=hueHex;ctx.fill();let white=ctx.createRadialGradient(cx-inner*.27,cy-inner*.3,0,cx,cy,inner*1.2);white.addColorStop(0,'#fff');white.addColorStop(.72,'rgba(255,255,255,.75)');white.addColorStop(1,'rgba(255,255,255,0)');ctx.fillStyle=white;ctx.fill();let black=ctx.createLinearGradient(0,cy-inner,0,cy+inner);black.addColorStop(0,'rgba(0,0,0,0)');black.addColorStop(.48,'rgba(0,0,0,.05)');black.addColorStop(1,'rgba(0,0,0,.98)');ctx.fillStyle=black;ctx.fill();ctx.beginPath();ctx.arc(cx,cy,inner,0,Math.PI*2);ctx.strokeStyle='#242527';ctx.lineWidth=size*.04;ctx.stroke();const a=colorWheelState.h*Math.PI/180,hx=cx+Math.cos(a)*(size*.41),hy=cy+Math.sin(a)*(size*.41);ctx.beginPath();ctx.arc(hx,hy,size*.043,0,Math.PI*2);ctx.fillStyle=hueHex;ctx.fill();ctx.strokeStyle='#f4f4f4';ctx.lineWidth=2;ctx.stroke();const vx=cx+Math.cos(a)*inner*colorWheelState.s,vy=cy+Math.sin(a)*inner*colorWheelState.s;ctx.beginPath();ctx.arc(vx,vy,size*.027,0,Math.PI*2);ctx.fillStyle=hsvToColorHex(colorWheelState.h,colorWheelState.s,colorWheelState.v);ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();}
+function applyMaterialWheelColor(){const hex=hsvToColorHex(colorWheelState.h,colorWheelState.s,colorWheelState.v),input=$('#materialColor');input.value=hex;$('#materialColorPreview').textContent=hex.toUpperCase();$('#materialColorPreview').style.background=hex;const rgb=rgbHexToHsv(hex);$('#materialColorPreview').style.color=rgb.v>.58&&rgb.s<.25?'#222':'#fff';input.dispatchEvent(new Event('input',{bubbles:true}));drawMaterialColorWheel();}
+function handleMaterialWheelPointer(event){const canvas=$('#materialColorWheel'),rect=canvas.getBoundingClientRect(),scale=canvas.width/rect.width,x=(event.clientX-rect.left)*scale-canvas.width/2,y=(event.clientY-rect.top)*scale-canvas.height/2,r=Math.hypot(x,y),inner=canvas.width*.315;if(r>inner*.89&&r<canvas.width*.5){colorWheelState.h=(Math.atan2(y,x)*180/Math.PI+360)%360;}else if(r<=inner){colorWheelState.s=THREE.MathUtils.clamp(r/inner,0,1);colorWheelState.v=THREE.MathUtils.clamp(1-(y/inner+0.3)*.77,.015,1);}else return;applyMaterialWheelColor();}
+const materialWheel=$('#materialColorWheel');materialWheel.addEventListener('pointerdown',event=>{event.preventDefault();materialWheel.setPointerCapture?.(event.pointerId);handleMaterialWheelPointer(event);});materialWheel.addEventListener('pointermove',event=>{if(event.buttons||event.pressure>0)handleMaterialWheelPointer(event);});
 function refreshMaterialPanel() {
   const panel=$('#materialPanel'); if(!panel||panel.hidden)return;
   const meshes=materialTargetsFor(selected); const chooser=$('#materialMeshTarget'); chooser.replaceChildren();
@@ -351,7 +363,7 @@ function refreshMaterialPanel() {
   renderMaterialMesh=meshes.find(mesh=>mesh.uuid===renderMaterialMesh?.uuid)||meshes[0];chooser.value=renderMaterialMesh.uuid;
   const mats=materialListFor(renderMaterialMesh);const mat=mats[0];if(!mat)return;
   $('#materialTargetName').textContent=`${selected?.name||'Objeto'} · ${renderMaterialMesh.name||'Malla'}`;
-  $('#materialColor').value=`#${mat.color?.getHexString?.()||'ffffff'}`;$('#baseTextureFile').value='';$('#roughnessTextureFile').value='';$('#normalTextureFile').value='';
+  $('#materialColor').value=`#${mat.color?.getHexString?.()||'ffffff'}`;colorWheelState=rgbHexToHsv($('#materialColor').value);$('#materialColorPreview').textContent=$('#materialColor').value.toUpperCase();$('#materialColorPreview').style.background=$('#materialColor').value;$('#materialColorPreview').style.color=colorWheelState.v>.58&&colorWheelState.s<.25?'#222':'#fff';drawMaterialColorWheel();$('#baseTextureFile').value='';$('#roughnessTextureFile').value='';$('#normalTextureFile').value='';
   const safeRoughness=THREE.MathUtils.clamp(Number.isFinite(mat.roughness)?mat.roughness:0.55,0.12,0.94);mat.roughness=safeRoughness;$('#materialRoughness').min='0.12';$('#materialRoughness').max='0.94';$('#materialRoughness').value=String(safeRoughness);$('#roughnessValue').value=safeRoughness.toFixed(2);
   $('#materialMetalness').value=String(mat.metalness??0.05);$('#metalnessValue').value=Number(mat.metalness??0.05).toFixed(2);
   $('#materialEmissive').value=`#${mat.emissive?.getHexString?.()||'000000'}`;$('#materialEmissionPower').value=String(mat.emissiveIntensity||0);$('#emissionValue').value=Number(mat.emissiveIntensity||0).toFixed(2);
@@ -521,7 +533,7 @@ function removeSelected() {
 function snapshot() {
   const modelPoses=[];for(const root of objects.filter(item=>item.userData.kind==='Modelo'))root.traverse(node=>{if(!node.isBone)return;const path=[];let current=node;while(current&&current!==root){const parent=current.parent;if(!parent)break;path.unshift(parent.children.indexOf(current));current=parent;}modelPoses.push({owner:root.userData.assetKey||root.name,path,position:node.position.toArray(),quaternion:node.quaternion.toArray(),scale:node.scale.toArray()});});
   const animationData={loop:animationLoop,keyframes:[...keyframes.entries()].map(([frame,pose])=>({frame,targets:[...pose.entries()].map(([uuid,transform])=>{const node=[...objects,...allBones()].find(item=>item.uuid===uuid);if(!node)return null;let root=node;while(root.parent&&!objects.includes(root))root=root.parent;const objectIndex=objects.indexOf(root),path=[];let current=node;while(current!==root&&current.parent){path.unshift(current.parent.children.indexOf(current));current=current.parent;}return{name:node.name||'',kind:node.isBone?'bone':'object',owner:node.isBone?(root.name||''):node.userData?.kind||'',objectIndex,path,transform};}).filter(Boolean)}))};
-  return { format: 'editor-3d-scene', version: 8, renderSettings:{postLook:$('#postLook')?.value||'cinematic',postEnabled,gridVisible,activeTool,cameraMode,activeCameraName:cameraMode?activeCamera?.name||'':viewCameraObject?.name||'',selectedName:selected?.name||'',currentFrame}, animation:animationData, modelPoses, objects: objects.map((object) => ({
+  return { format: 'editor-3d-scene', version: 8, renderSettings:{postLook:$('#postLook')?.value||'cinematic',postEnabled,realisticMode,gridVisible,activeTool,cameraMode,activeCameraName:cameraMode?activeCamera?.name||'':viewCameraObject?.name||'',selectedName:selected?.name||'',currentFrame}, animation:animationData, modelPoses, objects: objects.map((object) => ({
     name: object.name, kind: object.userData.kind || 'Cubo', assetKey: object.userData.kind === 'Modelo' ? (object.userData.assetKey || null) : undefined, position: object.position.toArray(),
     rotation: object.rotation.toArray(), scale: object.scale.toArray(),
     color: `#${object.material?.color?.getHexString?.() || object.color?.getHexString?.() || 'ffffff'}`,
@@ -652,13 +664,16 @@ function renderSize() {
   if (mode === '720') return [1280, 720];
   return [Math.max(2, container.clientWidth & ~1), Math.max(2, container.clientHeight & ~1)];
 }
+function captureScenePose(){const pose=new Map();for(const node of [...objects,...allBones()])pose.set(node.uuid,readTransform(node));return pose;}
+function restoreScenePose(pose){for(const node of [...objects,...allBones()]){const state=pose.get(node.uuid);if(state)writeTransform(node,state);}currentModel?.updateMatrixWorld(true);updateBoneMarkers();}
+function mobileVideoSize(){const [w0,h0]=renderSize();const scale=Math.min(1,640/w0,360/h0);return[Math.max(2,Math.floor(w0*scale/2)*2),Math.max(2,Math.floor(h0*scale/2)*2)];}
 function hideEditorGuidesForRender() {
   const restore=[];
   const hide=node=>{if(!node)return;restore.push([node,node.visible]);node.visible=false;};
   hide(grid); hide(window.editorGizmo?.getHelper());
   for(const object of objects) hide(object.userData.helper);
   for(const marker of boneDots.values()) hide(marker);
-  return ()=>{for(const [node,visible] of restore)node.visible=visible;};
+  return ()=>{if(renderCaptureActive)return;for(const [node,visible] of restore)node.visible=visible;};
 }
 function captureRenderFrame(width, height) {
   const oldSize = new THREE.Vector2(); renderer.getSize(oldSize);
@@ -695,7 +710,8 @@ async function exportPng() {
   } catch (error) { toast(`No se pudo exportar PNG: ${error.message || error}`); }
 }
 async function exportMp4() {
-  await prepareRenderLighting();
+  if(renderCaptureActive){toast('Ya hay una exportación en curso');return;}
+  // MP4 uses the current lighting snapshot and never starts a second expensive shadow bake.
   const duration = Math.max(1, Math.min(15, Number($('#renderDuration').value) || 5));
   if (Capacitor.isNativePlatform()) { await exportMp4Native(duration); return; }
   if (!('VideoEncoder' in window) || !('VideoFrame' in window)) {
@@ -703,10 +719,10 @@ async function exportMp4() {
     $('#renderStatus').textContent = 'No se generó MP4: este WebView no incluye WebCodecs H.264. PNG funciona; MP4 requiere un Android/WebView compatible.';
     return;
   }
-  const [width, height] = renderSize();
-  const config = { codec: 'avc1.640028', width, height, bitrate: 16000000, framerate: 30 };
+  const [width, height] = mobileVideoSize();
+  const config = { codec: 'avc1.640028', width, height, bitrate: 2500000, framerate: 20 };
   let support = await VideoEncoder.isConfigSupported(config).catch(() => null);
-  if(!support?.supported){config.codec='avc1.42001f';config.bitrate=9000000;config.framerate=24;support=await VideoEncoder.isConfigSupported(config).catch(()=>null);}
+  if(!support?.supported){config.codec='avc1.42001f';config.bitrate=1800000;config.framerate=18;support=await VideoEncoder.isConfigSupported(config).catch(()=>null);}
   if (!support?.supported) { $('#renderStatus').textContent = 'El dispositivo no ofrece H.264 para MP4 en este WebView; no se guardó un video con extensión incorrecta.'; toast('Codificador MP4 no disponible'); return; }
   const target = new BufferTarget();
   const output = new Output({ format: new Mp4OutputFormat(), target });
@@ -714,16 +730,16 @@ async function exportMp4() {
   const videoSource = new CanvasSource(renderCanvas, { codec: 'avc', quality: new Quality({ bitrate: config.bitrate }) });
   const fps = config.framerate; output.addVideoTrack(videoSource, { frameRate: fps });
   const oldSize = new THREE.Vector2(); renderer.getSize(oldSize); const oldRatio = renderer.getPixelRatio(); const renderCamera = cameraMode ? activeCamera : camera; const oldAspect = renderCamera.aspect;
-  const restoreGuides=hideEditorGuidesForRender();
-  renderer.setPixelRatio(1); renderer.setSize(width, height, false); composer.setPixelRatio(1); composer.setSize(width, height); renderCamera.aspect = width / height; renderCamera.updateProjectionMatrix();
-  sceneRenderPass.camera = renderCamera;
-  $('#renderStatus').textContent = `Renderizando MP4 · ${duration} s…`;
+  const wasPlaying=isPlaying, savedFrame=currentFrame, savedPose=captureScenePose();if(isPlaying){isPlaying=false;clearInterval(playTimer);$('#playAnimation').textContent='▶';}
+  const oldPost=postEnabled,oldBloom=bloomPass.enabled,oldLightPost=lightPostPass.enabled;const restoreGuides=hideEditorGuidesForRender();renderCaptureActive=true;
+  $('#renderStatus').textContent = `Renderizando MP4 ${width}×${height} · ${duration} s…`;
   try {
+    renderer.setPixelRatio(1); renderer.setSize(width, height, false); composer.setPixelRatio(1); composer.setSize(width, height); renderCamera.aspect = width / height; renderCamera.updateProjectionMatrix();sceneRenderPass.camera = renderCamera;
     await output.start();
     const total = duration * fps;
     for (let index = 0; index < total; index++) {
-      if (keyframes.size) interpolatePose(Math.round(index / Math.max(1, total - 1) * 120));
-      else if (importedMixer && importedAnimationAction) importedMixer.setTime(index / fps);
+      if (keyframes.size) interpolatePose(index / Math.max(1, total - 1) * 120);
+      else if (importedMixer && importedAnimationAction) { importedMixer.setTime(index / fps); currentModel?.updateMatrixWorld(true); }
       if (usePostPipeline()) composer.render(); else renderer.render(scene, renderCamera);
       await videoSource.add(index / fps, 1 / fps);
       if (index % 10 === 0) { $('#renderStatus').textContent = `Renderizando MP4 · ${Math.floor(index / total * 100)}%`; await new Promise((resolve) => requestAnimationFrame(resolve)); }
@@ -734,19 +750,20 @@ async function exportMp4() {
     else download(name, blob, 'video/mp4');
     $('#renderStatus').textContent = 'MP4 H.264 exportado.'; toast('Render MP4 listo');
   } catch (error) { console.error(error); toast(`No se pudo renderizar MP4: ${error.message || error}`); $('#renderStatus').textContent = `Falló la exportación MP4: ${error.message || error}`; }
-  finally { restoreGuides(); renderer.setPixelRatio(oldRatio); renderer.setSize(oldSize.x, oldSize.y, false); composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25)); composer.setSize(oldSize.x, oldSize.y); renderCamera.aspect = oldAspect; renderCamera.updateProjectionMatrix(); sceneRenderPass.camera = cameraMode ? activeCamera : camera; if (keyframes.size) interpolatePose(currentFrame); }
+  finally { renderCaptureActive=false;restoreGuides();postEnabled=oldPost;bloomPass.enabled=oldBloom;lightPostPass.enabled=oldLightPost;renderer.setPixelRatio(oldRatio);renderer.setSize(oldSize.x,oldSize.y,false);composer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.25));composer.setSize(oldSize.x,oldSize.y);renderCamera.aspect=oldAspect;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=cameraMode?activeCamera:camera;currentFrame=savedFrame;restoreScenePose(savedPose);if(wasPlaying)togglePlayback(); }
 }
 async function exportMp4Native(duration) {
-  const [width,height]=renderSize(), fps=30, total=duration*fps, renderCamera=cameraMode?activeCamera:camera;
+  const [width,height]=mobileVideoSize(), fps=24, total=duration*fps, renderCamera=cameraMode?activeCamera:camera;
   const oldSize=new THREE.Vector2();renderer.getSize(oldSize);const oldRatio=renderer.getPixelRatio(),oldAspect=renderCamera.aspect;
-  const restoreGuides=hideEditorGuidesForRender();
+  const wasPlaying=isPlaying,savedFrame=currentFrame,savedPose=captureScenePose();if(isPlaying){isPlaying=false;clearInterval(playTimer);$('#playAnimation').textContent='▶';}
+  const oldPost=postEnabled,oldBloom=bloomPass.enabled,oldLightPost=lightPostPass.enabled;const restoreGuides=hideEditorGuidesForRender();renderCaptureActive=true;
   try {
     renderer.setPixelRatio(1);renderer.setSize(width,height,false);composer.setPixelRatio(1);composer.setSize(width,height);renderCamera.aspect=width/height;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=renderCamera;
-    await NativeRenderExport.startVideo({width,height,fps});$('#renderStatus').textContent=`Renderizando MP4 · ${duration} s…`;
-    for(let i=0;i<total;i++){if(keyframes.size)interpolatePose(Math.round(i/Math.max(1,total-1)*120));else if(importedMixer&&importedAnimationAction)importedMixer.setTime(i/fps);if(usePostPipeline())composer.render();else renderer.render(scene,renderCamera);const jpeg=renderer.domElement.toDataURL('image/jpeg',0.94).split(',')[1];await NativeRenderExport.addVideoFrame({jpeg});if(i%3===0){$('#renderStatus').textContent=`Renderizando MP4 · ${Math.floor((i+1)/total*100)}%`;await new Promise(resolve=>requestAnimationFrame(resolve));}}
+    const started=await NativeRenderExport.startVideo({width,height,fps});if(started?.ready===false)throw new Error('El codificador no quedó iniciado');$('#renderStatus').textContent=`Renderizando MP4 ${width}×${height} · ${duration} s…`;
+    for(let i=0;i<total;i++){if(keyframes.size)interpolatePose(i/Math.max(1,total-1)*120);else if(importedMixer&&importedAnimationAction){importedMixer.setTime(i/fps);currentModel?.updateMatrixWorld(true);}if(usePostPipeline())composer.render();else renderer.render(scene,renderCamera);const jpeg=renderer.domElement.toDataURL('image/jpeg',0.94).split(',')[1];await NativeRenderExport.addVideoFrame({jpeg});if(i%3===0){$('#renderStatus').textContent=`Renderizando MP4 · ${Math.floor((i+1)/total*100)}%`;await new Promise(resolve=>requestAnimationFrame(resolve));}}
     await NativeRenderExport.finishVideo();$('#renderStatus').textContent='MP4 guardado en la carpeta elegida.';toast('Exportación MP4 lista');
-  } catch(error){console.error(error);$('#renderStatus').textContent=`Falló la exportación MP4: ${error.message||error}`;toast(`No se pudo exportar MP4: ${error.message||error}`);}
-  finally{restoreGuides();renderer.setPixelRatio(oldRatio);renderer.setSize(oldSize.x,oldSize.y,false);composer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.25));composer.setSize(oldSize.x,oldSize.y);renderCamera.aspect=oldAspect;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=cameraMode?activeCamera:camera;if(keyframes.size)interpolatePose(currentFrame);}
+  } catch(error){console.error(error);try{await NativeRenderExport.abortVideo();}catch(_){}$('#renderStatus').textContent=`Falló la exportación MP4: ${error.message||error}`;toast(`No se pudo exportar MP4: ${error.message||error}`);}
+  finally{renderCaptureActive=false;restoreGuides();postEnabled=oldPost;bloomPass.enabled=oldBloom;lightPostPass.enabled=oldLightPost;renderer.setPixelRatio(oldRatio);renderer.setSize(oldSize.x,oldSize.y,false);composer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.25));composer.setSize(oldSize.x,oldSize.y);renderCamera.aspect=oldAspect;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=cameraMode?activeCamera:camera;currentFrame=savedFrame;restoreScenePose(savedPose);if(wasPlaying)togglePlayback();}
 }
 let renderFolderHandle = null;
 async function chooseRenderFolder() {
@@ -811,8 +828,8 @@ async function loadScene(data) {
   if (data?.format !== 'editor-3d-scene' || !Array.isArray(data.objects)) throw new Error('Archivo de escena no válido');
   clearTimeout(reflectionRefreshTimer);for(const state of wetSurfaces.values()){scene.remove(state.probe);state.target.dispose();}wetSurfaces.clear();reflectionDirty=false;reflectionRefreshDue=0;reflectionStatus('');
   for (const object of [...objects]) { scene.remove(object); if (object.userData.helper) scene.remove(object.userData.helper); }
-  for (const marker of boneDots.values()) scene.remove(marker);
-  boneDots.clear();objects.length=0;assetObjects.length=0;keyframes.clear();currentFrame=0;animationLoop=data.animation?.loop!==false;$('#animationLoop').checked=animationLoop;selected = null; currentModel = null; boneTarget = null; importedMixer = null; importedClips = []; importedAnimationAction = null; viewCameraObject = null; $('#animationPanel').querySelector('.clip-box')?.remove();
+  for (const marker of boneDots.values()){scene.remove(marker);marker.material?.dispose?.();}
+  boneDots.clear();objects.length=0;assetObjects.length=0;keyframes.clear();animationTrackCache=null;currentFrame=0;animationLoop=data.animation?.loop!==false;$('#animationLoop').checked=animationLoop;selected = null; currentModel = null; boneTarget = null; importedMixer = null; importedClips = []; importedAnimationAction = null; viewCameraObject = null; $('#animationPanel').querySelector('.clip-box')?.remove();
   $('#enterCamera').hidden = true; if (cameraMode) exitCameraView();
   loadingProjectScene = true;
   const modelItems=[];
@@ -835,7 +852,7 @@ async function loadScene(data) {
   }
   for(const item of modelItems){if(!item.assetKey)continue;try{const blob=await getModelAsset(item.assetKey);if(!blob)continue;const buffer=await blob.arrayBuffer();await new Promise((resolve,reject)=>new GLTFLoader().parse(buffer,'',(gltf)=>{const model=gltf.scene;model.name=safeName(item.name||'Modelo');model.userData.kind='Modelo';model.userData.assetKey=item.assetKey;model.position.fromArray(item.position||[0,0,0]);model.rotation.fromArray(item.rotation||[0,0,0]);model.scale.fromArray(item.scale||[1,1,1]);restoreMaterialSnapshots(model,item.materials);model.traverse(child=>{if(child.isMesh){child.castShadow=true;child.receiveShadow=true;}});scene.add(model);objects.push(model);currentModel=model;importedClips=gltf.animations||[];importedMixer=importedClips.length?new THREE.AnimationMixer(model):null;if(importedMixer)addImportedClipControls(importedClips,importedMixer);makeBoneMarkers(model);resolve();},reject));}catch(error){console.warn('Could not restore imported model',error);}}
   for(const pose of data.modelPoses||[]){const owner=objects.find(item=>item.userData.kind==='Modelo'&&(item.userData.assetKey||item.name)===pose.owner);let node=owner;for(const index of pose.path||[])node=node?.children?.[index];if(node?.isBone){node.position.fromArray(pose.position||[0,0,0]);node.quaternion.fromArray(pose.quaternion||[0,0,0,1]).normalize();node.scale.fromArray(pose.scale||[1,1,1]);}}
-  if(Array.isArray(data.animation?.keyframes)){const nodes=[...objects,...allBones()];for(const row of data.animation.keyframes){const pose=new Map();for(const target of row.targets||[]){let node=null;if(Number.isInteger(target.objectIndex)){node=objects[target.objectIndex]||null;for(const index of target.path||[])node=node?.children?.[index]||null;}if(!node)node=nodes.find(item=>(item.name||'')===target.name&&(item.isBone?target.kind==='bone':(item.userData?.kind||'Cubo')===target.owner));if(node)pose.set(node.uuid,target.transform);}if(pose.size)keyframes.set(Number(row.frame)||0,pose);}}
+  if(Array.isArray(data.animation?.keyframes)){const nodes=[...objects,...allBones()];for(const row of data.animation.keyframes){const pose=new Map();for(const target of row.targets||[]){let node=null;if(Number.isInteger(target.objectIndex)){node=objects[target.objectIndex]||null;for(const index of target.path||[])node=node?.children?.[index]||null;}if(!node)node=nodes.find(item=>(item.name||'')===target.name&&(item.isBone?target.kind==='bone':(item.userData?.kind||'Cubo')===target.owner));if(node)pose.set(node.uuid,target.transform);}if(pose.size)keyframes.set(Number(row.frame)||0,pose);}animationTrackCache=null;}
   currentFrame=Number(data.renderSettings?.currentFrame)||0;loadingProjectScene=false;restoreWetSurfaces();emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();rebuildTimeline();updateFrameControls();
   if (viewCameraObject) $('#enterCamera').hidden = false;
   if(data.renderSettings?.selectedName){const previous=objects.find(item=>item.name===data.renderSettings.selectedName);if(previous)selected=previous;}
@@ -940,7 +957,7 @@ function updateBoneMarkers() {
   const worldPosition = new THREE.Vector3();
   const height = Math.max(1, container.clientHeight);
   for (const [bone, marker] of boneDots) {
-    marker.visible = animationMode;
+    marker.visible = animationMode && !renderCaptureActive;
     if (!animationMode) continue;
     bone.getWorldPosition(worldPosition);
     marker.position.copy(worldPosition);
@@ -968,19 +985,19 @@ function refreshGizmoEmissive() {
   });
 }
 function makeBoneMarkers(model) {
-  for (const marker of boneDots.values()) scene.remove(marker);
+  for (const marker of boneDots.values()){scene.remove(marker);marker.material?.dispose?.();}
   boneDots.clear();
   model.updateMatrixWorld(true);
   const bones = [];
   model.traverse((node) => { if (node.isBone) bones.push(node); });
-  const geometry = new THREE.SphereGeometry(1, 10, 8);
+  const geometry = sharedBoneMarkerGeometry||(sharedBoneMarkerGeometry=new THREE.SphereGeometry(1, 8, 6));
   bones.forEach((bone) => {
     const material = new THREE.MeshBasicMaterial({ color: '#e8f3f7', depthTest: false, depthWrite: false, toneMapped: false });
     const marker = new THREE.Mesh(geometry, material);
     marker.name = `Bone handle: ${bone.name || 'Bone'}`;
     marker.userData.boneHandleTarget = bone;
     marker.renderOrder = 1001;
-    marker.visible = animationMode;
+    marker.visible = animationMode && !renderCaptureActive;
     scene.add(marker);
     boneDots.set(bone, marker);
   });
@@ -1135,9 +1152,10 @@ function captureKeyframe() {
   const target = activeAnimationTarget || boneTarget || selected;
   if (!target) { toast('Selecciona un objeto o hueso'); return; }
   const pose = keyframes.get(frame) || new Map();
-  if(target.isBone){currentModel?.updateMatrixWorld(true);for(const bone of allBones())pose.set(bone.uuid,readTransform(bone));}
-  else pose.set(target.uuid, readTransform(target));
-  keyframes.set(frame, pose);
+  currentModel?.updateMatrixWorld(true);
+  for(const object of objects)pose.set(object.uuid,readTransform(object));
+  for(const bone of allBones())pose.set(bone.uuid,readTransform(bone));
+  keyframes.set(frame, pose);animationTrackCache=null;
   scheduleProjectSave();recordHistory();rebuildTimeline();
   updateFrameControls();
   toast(`Keyframe de ${target.name || 'objeto'} · fotograma ${frame}`);
@@ -1154,43 +1172,34 @@ function updateFrameControls() {
   if (cursor) cursor.style.left = `${(currentFrame / 120) * 100}%`;
   updateKeyMarkers();
 }
+function buildAnimationTrackCache(){
+  const tracks=new Map();
+  for(const [frame,pose] of keyframes){for(const [uuid,transform] of pose){if(!tracks.has(uuid))tracks.set(uuid,[]);tracks.get(uuid).push([frame,transform]);}}
+  for(const list of tracks.values())list.sort((a,b)=>a[0]-b[0]);
+  animationTrackCache=tracks;return tracks;
+}
 function interpolatePose(frame) {
-  const animatedNodes = new Map();
-  for (const pose of keyframes.values()) for (const [uuid] of pose) animatedNodes.set(uuid, true);
-  const nodes = new Map([...objects, ...allBones()].map((node) => [node.uuid, node]));
-  for (const uuid of animatedNodes.keys()) {
-    const node = nodes.get(uuid);
-    if (!node) continue;
-    const available = [...keyframes.entries()].filter(([, pose]) => pose.has(uuid)).sort((a, b) => a[0] - b[0]);
-    if (available.length < 2) continue;
-    let before = available.filter(([at]) => at <= frame).at(-1);
-    let after = available.find(([at]) => at >= frame);
-    before ||= available[0];
-    after ||= available.at(-1);
-    const [f0, start] = before, [f1, end] = after;
-    const t = f0 === f1 ? 0 : THREE.MathUtils.clamp((frame - f0) / (f1 - f0), 0, 1);
-    const from = readTransform({ position: start.position, quaternion: start.quaternion, scale: start.scale });
-    const to = readTransform({ position: end.position, quaternion: end.quaternion, scale: end.scale });
-    node.position.lerpVectors(new THREE.Vector3(...from.position), new THREE.Vector3(...to.position), t);
-    node.scale.lerpVectors(new THREE.Vector3(...from.scale), new THREE.Vector3(...to.scale), t);
-    node.quaternion.copy(new THREE.Quaternion(...from.quaternion)).slerp(new THREE.Quaternion(...to.quaternion), t).normalize();
+  const tracks=animationTrackCache||buildAnimationTrackCache();
+  const nodes=new Map([...objects,...allBones()].map(node=>[node.uuid,node]));
+  for(const [uuid,available] of tracks){
+    const node=nodes.get(uuid);if(!node||available.length<2)continue;
+    let lo=0,hi=available.length;while(lo<hi){const mid=(lo+hi)>>1;if(available[mid][0]<frame)lo=mid+1;else hi=mid;}
+    const afterIndex=lo,before=available[Math.max(0,afterIndex-1)],after=available[Math.min(available.length-1,afterIndex)];
+    const [f0,start]=before,[f1,end]=after;const t=f0===f1?0:THREE.MathUtils.clamp((frame-f0)/(f1-f0),0,1);
+    node.position.fromArray(start.position).lerp(new THREE.Vector3(...end.position),t);
+    node.scale.fromArray(start.scale).lerp(new THREE.Vector3(...end.scale),t);
+    node.quaternion.fromArray(start.quaternion).slerp(new THREE.Quaternion(...end.quaternion),t).normalize();
   }
-  updateBoneMarkers();
+  currentModel?.updateMatrixWorld(true);if(performance.now()-(window._lastMarkerUpdate||0)>45){updateBoneMarkers();window._lastMarkerUpdate=performance.now();}
 }
 function setFrame(frame) {
-  currentFrame = Math.max(0, Math.min(120, Number(frame) || 0));
+  currentFrame = THREE.MathUtils.clamp(Number.isFinite(Number(frame))?Number(frame):0,0,120);
   interpolatePose(currentFrame);
   updateFrameControls();
 }
 function togglePlayback() {
-  isPlaying = !isPlaying;
-  $('#playAnimation').textContent = isPlaying ? '❚❚' : '▶';
-  clearInterval(playTimer);
-  if (isPlaying) playTimer = setInterval(() => {
-    if(currentFrame>=120){if(!animationLoop){isPlaying=false;$('#playAnimation').textContent='▶';clearInterval(playTimer);return;}currentFrame=0;}else currentFrame++;
-    interpolatePose(currentFrame);
-    updateFrameControls();
-  }, 40);
+  isPlaying = !isPlaying;$('#playAnimation').textContent=isPlaying?'❚❚':'▶';clearInterval(playTimer);
+  if(isPlaying)playTimer=setInterval(()=>{if(document.visibilityState==='hidden'||renderCaptureActive)return;const step=120/Math.max(1,(Number($('#renderDuration').value)||5)*24);if(currentFrame>=120){if(!animationLoop){isPlaying=false;$('#playAnimation').textContent='▶';clearInterval(playTimer);return;}currentFrame=0;}else currentFrame=Math.min(120,currentFrame+step);interpolatePose(currentFrame);updateFrameControls();},1000/24);
 }
 function resize() {
   const rect = container.getBoundingClientRect();
@@ -1250,10 +1259,10 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
       if (distance < nearest) { nearest = distance; targetBone = bone; }
     }
     if (targetBone) selectBone(targetBone);
-    else if (!currentModel && activeTool === 'select') {
+    else if (activeTool === 'select') {
       const hits = raycaster.intersectObjects(objects, true);
       const hit = hits[0]?.object;
-      if (hit) { let target = hit; while (target && !objects.includes(target)) target = target.parent; if (target) { selected = target; activeAnimationTarget = target; window.editorGizmo?.attach(target); window.editorGizmo?.setMode('translate'); $('#timelineTrackName').textContent = target.name; rebuildTimeline(); } }
+      if (hit) { let target = hit; while (target && !objects.includes(target)) target = target.parent; if (target) { selected = target; activeAnimationTarget = target; boneTarget=null;window.editorGizmo?.attach(target); window.editorGizmo?.setMode('translate'); $('#timelineTrackName').textContent = target.name; rebuildTimeline(); } }
     }
     return;
   }
@@ -1277,7 +1286,7 @@ $('#materialPanelToggle').addEventListener('click',()=>{const panel=$('#material
 $('#materialClose').addEventListener('click',()=>{$('#materialPanel').hidden=true;$('#workspace').classList.remove('show-material','hide-objects');});
 $('#objectsPanelToggle').addEventListener('click',()=>{const workspace=$('#workspace');if(workspace.classList.contains('show-material')){$('#materialPanel').hidden=true;workspace.classList.remove('show-material','hide-objects');return;}workspace.classList.toggle('hide-objects');});
 $('#materialMeshTarget').addEventListener('change',event=>{renderMaterialMesh=materialTargetsFor(selected).find(mesh=>mesh.uuid===event.target.value)||null;refreshMaterialPanel();});
-$('#materialColor').addEventListener('input',event=>editTargetMaterials(mat=>mat.color?.set(event.target.value)));
+$('#materialColor').addEventListener('input',event=>{if(event.isTrusted){colorWheelState=rgbHexToHsv(event.target.value);$('#materialColorPreview').textContent=event.target.value.toUpperCase();$('#materialColorPreview').style.background=event.target.value;drawMaterialColorWheel();}editTargetMaterials(mat=>mat.color?.set(event.target.value));});
 $('#materialRoughness').min='0.12';$('#materialRoughness').max='0.94';
 $('#materialRoughness').addEventListener('input',event=>{const value=Number(event.target.value);$('#roughnessValue').value=value.toFixed(2);editTargetMaterials(mat=>{if('roughness'in mat)mat.roughness=THREE.MathUtils.clamp(Number.isFinite(value)?value:0.55,0.12,0.94);});});
 $('#materialMetalness').addEventListener('input',event=>{const value=Number(event.target.value);$('#metalnessValue').value=value.toFixed(2);editTargetMaterials(mat=>{if('metalness'in mat)mat.metalness=value;});});
@@ -1339,17 +1348,18 @@ $('#addBoneTrack').addEventListener('click', () => {
   toast(`Pista de hueso: ${boneTarget.name || 'Hueso'}`);
 });
 function applyPostLook(name) {
-  const look = name === 'warm' ? {contrast:1.22,saturation:1.08,warmth:0.075,vignette:0.27,grain:0.01,bloom:0.36} : (name === 'neutral' ? {contrast:1.04,saturation:1,warmth:0.005,vignette:0.08,grain:0,bloom:0.12} : {contrast:1.08,saturation:0.98,warmth:0.015,vignette:0.15,grain:0.006,bloom:0.2});
-  const u=lightPostPass.uniforms;u.contrast.value=look.contrast;u.saturation.value=look.saturation;u.warmth.value=look.warmth;u.vignette.value=look.vignette;u.grain.value=look.grain;bloomPass.strength=look.bloom;
+  const look = name === 'warm' ? {contrast:1.22,saturation:1.08,warmth:0.075,vignette:0.27,grain:0.003,bloom:0.08} : (name === 'neutral' ? {contrast:1.04,saturation:1,warmth:0.005,vignette:0.08,grain:0,bloom:0.04} : {contrast:1.08,saturation:0.98,warmth:0.015,vignette:0.15,grain:0.002,bloom:0.06});
+  const u=lightPostPass.uniforms;u.contrast.value=look.contrast;u.saturation.value=look.saturation;u.warmth.value=look.warmth;u.vignette.value=look.vignette;u.grain.value=look.grain;bloomPass.strength=look.bloom;bloomPass.threshold=1.15;bloomPass.radius=0.025;
 }
-$('#postLook').addEventListener('change',event=>{applyPostLook(event.target.value);postEnabled=true;$('#postToggle').classList.add('active');bloomPass.enabled=true;lightPostPass.enabled=true;lightingBaked=false;saveCurrentProject();prepareRenderLighting();toast('Acabado actualizado · precalculando');});
+$('#postLook').addEventListener('change',event=>{if(!realisticMode){realisticMode=true;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=savedExposure;scene.environment=savedEnvironment;$('#postToggle').textContent='RA';$('#postToggle').classList.add('active');}applyPostLook(event.target.value);postEnabled=true;bloomPass.enabled=true;lightPostPass.enabled=true;lightingBaked=false;saveCurrentProject();prepareRenderLighting();toast('Acabado actualizado · modo realista');});
+$('#postToggle').title='Alternar modo realista y modo sólido ligero';$('#postToggle').setAttribute('aria-label','Modo realista o sólido');
 $('#postToggle').addEventListener('click', (event) => {
-  postEnabled = !postEnabled;
-  event.currentTarget.classList.toggle('active', postEnabled);
-  bloomPass.enabled = postEnabled;
-  lightPostPass.enabled = postEnabled;
-  if(postEnabled) { applyPostLook($('#postLook').value||'cinematic'); prepareRenderLighting(); }
-  toast(postEnabled ? 'Postprocesado activado · calculando sombras y reflejos' : 'Postprocesado desactivado');
+  realisticMode=!realisticMode;postEnabled=realisticMode;
+  if(realisticMode){scene.environment=savedEnvironment;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=0.78;renderer.shadowMap.enabled=false;event.currentTarget.textContent='RA';event.currentTarget.classList.add('active');bloomPass.enabled=true;lightPostPass.enabled=true;applyPostLook($('#postLook').value||'cinematic');}
+  else{scene.environment=null;renderer.toneMapping=THREE.NoToneMapping;renderer.toneMappingExposure=1;renderer.shadowMap.enabled=false;bloomPass.enabled=false;lightPostPass.enabled=false;event.currentTarget.textContent='Sólido';event.currentTarget.classList.remove('active');}
+  if(realisticMode){bloomPass.enabled=true;lightPostPass.enabled=true;}
+  else{bloomPass.enabled=false;lightPostPass.enabled=false;}
+  usePostPipeline();saveCurrentProject();toast(realisticMode?'Modo realista activado':'Modo sólido ligero activado');
 });
 document.querySelectorAll('[data-tool]').forEach((button) => button.addEventListener('click', () => {
   setTool(button.dataset.tool);
@@ -1366,13 +1376,16 @@ document.querySelectorAll('[data-tool]').forEach((button) => button.addEventList
 resize();
 renderProjectCards();
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){saveCurrentProject();if(pendingTextureImports.size)Promise.allSettled([...pendingTextureImports]).then(saveCurrentProject);}});window.addEventListener('pagehide',()=>saveCurrentProject());navigator.storage?.persist?.().catch(()=>{});
-function frame() {
+let lastRenderTimestamp=0;
+function frame(timestamp=0) {
   requestAnimationFrame(frame);
+  if(document.visibilityState==='hidden'||renderCaptureActive||$('#app').hidden)return;
+  if(timestamp-lastRenderTimestamp<33)return;
   orbit.update();
-  lightPostPass.uniforms.time.value += 0.016;
-  if (importedMixer && importedAnimationAction) importedMixer.update(1 / 60);
-  if (currentModel && animationMode) updateBoneMarkers();
-
+  if(lightPostPass.enabled)lightPostPass.uniforms.time.value += 0.016;
+  if (importedMixer && importedAnimationAction) importedMixer.update(delta);
+  const delta=Math.min(0.05,Math.max(0,(timestamp-lastRenderTimestamp)/1000||1/30));lastRenderTimestamp=timestamp;
+  if (document.visibilityState==='hidden'||renderCaptureActive) return;
   if (usePostPipeline()) { sceneRenderPass.camera = cameraMode ? activeCamera : camera; composer.render(); }
   else renderer.render(scene, cameraMode ? activeCamera : camera);
 }
