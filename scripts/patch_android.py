@@ -38,6 +38,8 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
@@ -45,6 +47,7 @@ import java.util.Arrays;
 public class RenderExportPlugin extends Plugin {{
   private static final String PREFS = "editor3d_render_export";
   private static final String TREE_KEY = "tree_uri";
+  private static final String PROJECT_TREE_KEY = "project_tree_uri";
   private MediaCodec videoEncoder; private MediaMuxer videoMuxer; private File videoTemp; private int videoFrame, videoWidth, videoHeight, videoFps; private int videoTrack = -1; private int videoColorFormat; private boolean videoMuxerStarted = false;
 
   @PluginMethod
@@ -63,6 +66,78 @@ public class RenderExportPlugin extends Plugin {{
     try {{ getContext().getContentResolver().takePersistableUriPermission(tree, flags); }} catch (Exception e) {{ call.reject("Could not keep folder permission: " + e.getMessage()); return; }}
     getContext().getSharedPreferences(PREFS, 0).edit().putString(TREE_KEY, tree.toString()).apply();
     JSObject ret = new JSObject(); ret.put("displayName", queryName(tree)); call.resolve(ret);
+  }}
+
+  @PluginMethod
+  public void chooseProjectFolder(PluginCall call) {{
+    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+    startActivityForResult(call, intent, "projectFolderPicked");
+  }}
+
+  @ActivityCallback
+  private void projectFolderPicked(PluginCall call, ActivityResult result) {{
+    if (call == null) return;
+    if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {{ call.reject("canceled"); return; }}
+    Uri tree = result.getData().getData();
+    int flags = result.getData().getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+    try {{ getContext().getContentResolver().takePersistableUriPermission(tree, flags); }} catch (Exception e) {{ call.reject("Could not keep project folder permission: " + e.getMessage()); return; }}
+    getContext().getSharedPreferences(PREFS, 0).edit().putString(PROJECT_TREE_KEY, tree.toString()).apply();
+    JSObject ret = new JSObject(); ret.put("displayName", queryName(tree)); call.resolve(ret);
+  }}
+
+  @PluginMethod
+  public void getProjectFolder(PluginCall call) {{
+    String value = getContext().getSharedPreferences(PREFS, 0).getString(PROJECT_TREE_KEY, null);
+    JSObject ret = new JSObject(); ret.put("displayName", value == null ? "" : queryName(Uri.parse(value))); call.resolve(ret);
+  }}
+
+  @PluginMethod
+  public void readProjectFile(PluginCall call) {{
+    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+    intent.addCategory(Intent.CATEGORY_OPENABLE); intent.setType("application/json");
+    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+    startActivityForResult(call, intent, "projectFilePicked");
+  }}
+
+  @ActivityCallback
+  private void projectFilePicked(PluginCall call, ActivityResult result) {{
+    if (call == null) return;
+    if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {{ call.reject("canceled"); return; }}
+    Uri uri=result.getData().getData();
+    try {{
+      int flags=result.getData().getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
+      try {{ getContext().getContentResolver().takePersistableUriPermission(uri,flags); }} catch(Exception ignored) {{}}
+      ByteArrayOutputStream bytes=new ByteArrayOutputStream();
+      try(InputStream input=getContext().getContentResolver().openInputStream(uri)) {{ if(input==null)throw new IllegalStateException("Could not open project file");byte[] buffer=new byte[65536];int count;while((count=input.read(buffer))!=-1)bytes.write(buffer,0,count); }}
+      JSObject ret=new JSObject();ret.put("name",queryName(uri));ret.put("data",Base64.encodeToString(bytes.toByteArray(),Base64.NO_WRAP));call.resolve(ret);
+    }} catch(Exception e) {{ call.reject("Could not read project file: "+e.getMessage(),e); }}
+  }}
+
+  @PluginMethod
+  public void saveProjectFile(PluginCall call) {{
+    String name = call.getString("name"); String mime = call.getString("mimeType", "application/json"); String encoded = call.getString("data");
+    if (name == null || encoded == null) {{ call.reject("Missing project file name or data"); return; }}
+    String value = getContext().getSharedPreferences(PREFS, 0).getString(PROJECT_TREE_KEY, null);
+    if (value == null) {{ call.reject("Choose Documents for project backup first"); return; }}
+    try {{
+      Uri tree = Uri.parse(value);
+      Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree));
+      String safe = name.replaceAll("[^A-Za-z0-9._-]", "_");
+      String parentId = DocumentsContract.getTreeDocumentId(tree);
+      Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId);
+      try (Cursor cursor = getContext().getContentResolver().query(children, new String[]{{DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME}}, null, null, null)) {{
+        if (cursor != null) while (cursor.moveToNext()) if (safe.equals(cursor.getString(1))) {{
+          Uri old = DocumentsContract.buildDocumentUriUsingTree(tree, cursor.getString(0));
+          DocumentsContract.deleteDocument(getContext().getContentResolver(), old); break;
+        }}
+      }}
+      Uri file = DocumentsContract.createDocument(getContext().getContentResolver(), parent, mime, safe);
+      if (file == null) throw new IllegalStateException("Android could not create project file");
+      byte[] bytes = Base64.decode(encoded, Base64.DEFAULT);
+      try (OutputStream output = getContext().getContentResolver().openOutputStream(file, "w")) {{ if (output == null) throw new IllegalStateException("Android could not open project file"); output.write(bytes); output.flush(); }}
+      JSObject ret = new JSObject(); ret.put("name", safe); ret.put("uri", file.toString()); call.resolve(ret);
+    }} catch (Exception e) {{ call.reject("Could not save project file: " + e.getMessage(), e); }}
   }}
 
   @PluginMethod
