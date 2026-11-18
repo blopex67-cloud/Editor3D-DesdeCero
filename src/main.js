@@ -23,6 +23,7 @@ const $ = (selector) => document.querySelector(selector);
 const container = $('#scene');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#000000');
+let cameraVisualTemplatePromise=null;
 const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 500);
 camera.position.set(5, 4, 7);
 let renderer;
@@ -94,7 +95,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
 try {
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: false });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 0.75));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 0.82));
   renderer.shadowMap.enabled = false;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.shadowMap.autoUpdate = false;
@@ -186,7 +187,7 @@ const pendingModelImports = new Set();
 const pendingAssetMigrations = new Set();
 let emissiveBloomActive = false;
 let renderCaptureActive=false;
-let interactiveMotion=false;let idleQualityBoost=false;let adaptiveQualityTimer=0;let adaptiveQualityStep=0;let glContextAvailable=true;let adaptiveBaseRatio=Math.min(window.devicePixelRatio||1,0.75);
+let interactiveMotion=false;let idleQualityBoost=false;let adaptiveQualityTimer=0;let adaptiveQualityStep=0;let glContextAvailable=true;let adaptiveBaseRatio=Math.min(window.devicePixelRatio||1,0.82);
 let realisticMode=true;let savedEnvironment=scene.environment;let savedExposure=renderer.toneMappingExposure;let fastRenderMode=false;let reflectionsEnabled=true;let softShadowsEnabled=false;
 let animationTrackCache=null;let animationNodesCache=null;
 let sharedBoneMarkerGeometry=null;
@@ -200,6 +201,8 @@ function toast(message) {
 function updateStatus() {
   $('#status').textContent = `${currentProjectId ? (projectList().find((p) => p.id === currentProjectId)?.name || 'Proyecto') + ' · ' : ''}${objects.length} objeto${objects.length === 1 ? '' : 's'}`;
 }
+function addCameraVisual(cameraObject){if(!cameraObject?.isCamera)return;cameraVisualTemplatePromise ||= new GLTFLoader().loadAsync('/models/security-camera-optimized.glb').then(gltf=>gltf.scene).catch(error=>{console.warn('No se pudo cargar el modelo CC0 de cámara',error);return null;});cameraVisualTemplatePromise.then(template=>{if(!template||!cameraObject.parent||cameraObject.userData.cameraVisual)return;const model=template.clone(true);model.name='Cámara 3D · Poly Haven CC0';model.scale.setScalar(0.72);model.position.set(0,0.02,0.28);model.rotation.set(0,Math.PI,0);model.traverse(node=>{if(node.isMesh){node.castShadow=false;node.receiveShadow=false;for(const mat of Array.isArray(node.material)?node.material:[node.material]){mat.envMapIntensity=Math.min(mat.envMapIntensity??1,0.45);mat.needsUpdate=true;}}});cameraObject.add(model);cameraObject.userData.cameraVisual=model;model.visible=!(cameraMode&&activeCamera===cameraObject);});}
+function updateCameraAspect(cameraObject,mode){if(!cameraObject?.isCamera)return;cameraObject.userData.aspectMode=mode;const rect=container.getBoundingClientRect();cameraObject.aspect=mode==='4:3'?4/3:mode==='1:1'?1:mode==='16:9'?16/9:Math.max(.1,rect.width/Math.max(1,rect.height));cameraObject.userData.outputAspect=cameraObject.aspect;cameraObject.updateProjectionMatrix();cameraObject.userData.helper?.update?.();}
 function addAsset(kind) {
   animationNodesCache=null;lightingBaked=false;
   if (kind === 'point' || kind === 'directional') {
@@ -220,7 +223,8 @@ function addAsset(kind) {
   }
   let object;
   if (kind === 'camera') {
-    object = new THREE.PerspectiveCamera(50, camera.aspect, 0.01, 100);
+    object = new THREE.PerspectiveCamera(55, 16/9, 0.05, 200);
+    object.userData.aspectMode='16:9';object.userData.outputAspect=16/9;
     object.position.set(0, 2.2, 7);
     object.up.set(0,1,0); object.lookAt(0, 1, 0); object.rotation.z=0;
     object.name = `Cámara ${suffix}`;
@@ -228,7 +232,7 @@ function addAsset(kind) {
     object.userData.helper = new THREE.CameraHelper(object);
     scene.add(object.userData.helper);
     viewCameraObject = object;
-    $('#enterCamera').hidden = false;
+    $('#enterCamera').hidden = false;addCameraVisual(object);
   } else if (kind === 'point') {
     object = new THREE.PointLight(0xffffff, 2.2, 10, 2);
     object.position.set(1.5, 2.2, 1.5);
@@ -260,7 +264,7 @@ function addAsset(kind) {
   assetObjects.push(object);
   objects.push(object);
   select(object);
-  if (object.isCamera) { viewCameraObject = object; $('#enterCamera').hidden = false; }
+  if (object.isCamera) { viewCameraObject = object; $('#enterCamera').hidden = false;addCameraVisual(object); }
   rebuildTimeline();
   updateStatus();
   saveCurrentProject();
@@ -502,7 +506,7 @@ function renderProperties() {
   const p = selected.position;
   const r = selected.rotation;
   const s = selected.scale;
-  const cameraAction = selected.isCamera ? `<button id="selectedCameraView">Mirar por esta cámara</button><button id="alignCameraView">Alinear con la vista actual</button><div class="section-label">CÁMARA</div><label class="prop-label">Campo de visión <span><input id="cameraFov" type="range" min="20" max="100" step="1" value="${selected.fov}"><output>${Math.round(selected.fov)}°</output></span></label><label class="prop-label">Plano cercano<input id="cameraNear" type="number" min="0.01" step="0.01" value="${selected.near}"></label><label class="prop-label">Plano lejano<input id="cameraFar" type="number" min="10" step="10" value="${selected.far}"></label>` : '';
+  const cameraAction = selected.isCamera ? `<button id="selectedCameraView">Mirar por esta cámara</button><button id="alignCameraView">Alinear con la vista actual</button><div class="section-label">CÁMARA / CANVAS</div><small class="camera-credit">Modelo optimizado · Poly Haven · CC0</small><label class="prop-label">Formato <select id="cameraAspect"><option value="viewport">Igual al visor</option><option value="16:9">16:9</option><option value="4:3">4:3</option><option value="1:1">1:1</option></select></label><label class="prop-label">Campo de visión <span><input id="cameraFov" type="range" min="20" max="100" step="1" value="${selected.fov}"><output>${Math.round(selected.fov)}°</output></span></label><label class="prop-label">Plano cercano<input id="cameraNear" type="number" min="0.03" step="0.01" value="${selected.near}"></label><label class="prop-label">Plano lejano<input id="cameraFar" type="number" min="10" step="10" value="${selected.far}"></label>` : '';
   const lightEditor=selected.isLight?`<div class="section-label">LUZ</div><label class="prop-label">Color<input id="lightColor" type="color" value="#${selected.color?.getHexString?.()||'ffffff'}"></label><label class="prop-label">Intensidad <span><input id="lightIntensity" type="range" min="0" max="12" step="0.05" value="${selected.intensity}"><output>${Number(selected.intensity).toFixed(2)}</output></span></label>${'distance' in selected?`<label class="prop-label">Rango <span><input id="lightDistance" type="range" min="0" max="50" step="0.25" value="${selected.distance}"><output>${Number(selected.distance).toFixed(2)}</output></span></label>`:''}${'angle' in selected?`<label class="prop-label">Ángulo <span><input id="lightAngle" type="range" min="0.05" max="1.4" step="0.01" value="${selected.angle}"><output>${THREE.MathUtils.radToDeg(selected.angle).toFixed(0)}°</output></span></label><label class="prop-label">Penumbra <span><input id="lightPenumbra" type="range" min="0" max="1" step="0.01" value="${selected.penumbra}"><output>${Number(selected.penumbra).toFixed(2)}</output></span></label>`:''}`:'';
   props.innerHTML = `${cameraAction}<label class="prop-label">Nombre<input id="objectName" type="text" maxlength="50"></label>${lightEditor}
     <div class="section-label">POSICIÓN</div>${field('X', 0, p.x, 'position')}${field('Y', 1, p.y, 'position')}${field('Z', 2, p.z, 'position')}
@@ -510,6 +514,7 @@ function renderProperties() {
     <div class="section-label">ESCALA</div>${field('X', 0, s.x, 'scale')}${field('Y', 1, s.y, 'scale')}${field('Z', 2, s.z, 'scale')}`;
   const nameInput=$('#objectName');nameInput.value=selected.name;
   nameInput.addEventListener('change',()=>{selected.name=safeName(nameInput.value);refreshList();saveCurrentProject();});
+  $('#cameraAspect')?.addEventListener('change',e=>{updateCameraAspect(selected,e.target.value);scheduleProjectSave();});$('#cameraAspect').value=selected.userData.aspectMode||'16:9';
   $('#selectedCameraView')?.addEventListener('click', () => enterCameraView(selected));
   $('#alignCameraView')?.addEventListener('click',()=>{selected.position.copy(camera.position);selected.quaternion.copy(camera.quaternion);selected.up.set(0,1,0);selected.lookAt(orbit.target);selected.updateProjectionMatrix();selected.userData.helper?.update();scheduleProjectSave();toast('Cámara alineada con la vista del editor');});
   const lightChanged=()=>{lightingBaked=false;selected.userData.helper?.update?.();scheduleProjectSave();};
@@ -519,7 +524,7 @@ function renderProperties() {
   $('#lightAngle')?.addEventListener('input',e=>{selected.angle=Number(e.target.value);e.target.nextElementSibling.value=`${THREE.MathUtils.radToDeg(selected.angle).toFixed(0)}°`;lightChanged();});
   $('#lightPenumbra')?.addEventListener('input',e=>{selected.penumbra=Number(e.target.value);e.target.nextElementSibling.value=selected.penumbra.toFixed(2);lightChanged();});
   $('#cameraFov')?.addEventListener('input',e=>{selected.fov=Number(e.target.value);selected.updateProjectionMatrix();e.target.nextElementSibling.value=`${selected.fov}°`;selected.userData.helper?.update();scheduleProjectSave();});$('#cameraFov')?.addEventListener('change',()=>{if(animationMode&&autoKeyEnabled)captureKeyframe(selected);});
-  $('#cameraNear')?.addEventListener('change',e=>{selected.near=Math.max(0.005,Number(e.target.value)||0.01);selected.updateProjectionMatrix();selected.userData.helper?.update();scheduleProjectSave();});
+  $('#cameraNear')?.addEventListener('change',e=>{selected.near=Math.max(0.03,Number(e.target.value)||0.05);selected.updateProjectionMatrix();selected.userData.helper?.update();scheduleProjectSave();});
   $('#cameraFar')?.addEventListener('change',e=>{selected.far=Math.max(selected.near+1,Number(e.target.value)||100);selected.updateProjectionMatrix();selected.userData.helper?.update();scheduleProjectSave();});
   props.querySelectorAll('[data-axis]').forEach((input) => input.addEventListener('change', () => {
     const axis = Number(input.dataset.axis);
@@ -577,7 +582,7 @@ function snapshot() {
     geometryRecipe:object.userData.cubeFinish==='rounded'?{type:'roundedBox',size:object.userData.originalCubeGeometry? [object.userData.originalCubeGeometry.parameters.width,object.userData.originalCubeGeometry.parameters.height,object.userData.originalCubeGeometry.parameters.depth] : (object.geometry.boundingBox||new THREE.Box3().setFromObject(object)).getSize(new THREE.Vector3()).toArray(),radius:0.14}:null,cubeFinish:object.userData.cubeFinish||null,
     materials: (()=>{const rows=[];object.traverse?.(node=>{if(node.isMesh){const mats=Array.isArray(node.material)?node.material:[node.material];rows.push({nodeName:node.name,materials:mats.map(mat=>({color:mat.color?`#${mat.color.getHexString()}`:null,roughness:mat.roughness,metalness:mat.metalness,emissive:mat.emissive?`#${mat.emissive.getHexString()}`:null,emissiveIntensity:mat.emissiveIntensity,transmission:mat.transmission,transparencyEnabled:mat.userData?.transparencyEnabled===true,subsurfaceEnabled:mat.userData?.subsurfaceEnabled===true,subsurfaceDepth:mat.userData?.subsurfaceDepth??.18,originalTransparent:mat.userData?.originalTransparent, savedOpacity:mat.userData?.savedOpacity,ior:mat.ior,thickness:mat.thickness,transparent:mat.transparent,opacity:mat.opacity,cubeOriginal:mat.userData?.cubeOriginal?{color:mat.userData.cubeOriginal.color?.getHexString?.()||'ffffff',roughness:mat.userData.cubeOriginal.roughness,metalness:mat.userData.cubeOriginal.metalness,transmission:mat.userData.cubeOriginal.transmission,ior:mat.userData.cubeOriginal.ior,thickness:mat.userData.cubeOriginal.thickness,transparent:mat.userData.cubeOriginal.transparent,opacity:mat.userData.cubeOriginal.opacity}:null,editorShader:mat.userData?.editorShader||'original',noiseScale:mat.userData?.noiseScale??12,noiseStrength:mat.userData?.noiseStrength??.22,emissionEnabled:mat.userData?.emissionEnabled===true,savedEmissionPower:mat.userData?.savedEmissionPower??mat.emissiveIntensity,wetSurface:!!mat.userData?.wetSurface,wetOriginal:mat.userData?.wetOriginal||null,baseTextureKey:mat.userData?.baseTextureKey||null,roughnessTextureKey:mat.userData?.roughnessTextureKey||null,normalTextureKey:mat.userData?.normalTextureKey||null,normalScale:mat.normalScale?.toArray?.()||[1,1]}))});}});if(object.isMesh){const mats=Array.isArray(object.material)?object.material:[object.material];rows.push({nodeName:object.name,materials:mats.map(mat=>({color:mat.color?`#${mat.color.getHexString()}`:null,roughness:mat.roughness,metalness:mat.metalness,emissive:mat.emissive?`#${mat.emissive.getHexString()}`:null,emissiveIntensity:mat.emissiveIntensity,transmission:mat.transmission,transparencyEnabled:mat.userData?.transparencyEnabled===true,subsurfaceEnabled:mat.userData?.subsurfaceEnabled===true,subsurfaceDepth:mat.userData?.subsurfaceDepth??.18,originalTransparent:mat.userData?.originalTransparent, savedOpacity:mat.userData?.savedOpacity,ior:mat.ior,thickness:mat.thickness,transparent:mat.transparent,opacity:mat.opacity,cubeOriginal:mat.userData?.cubeOriginal?{color:mat.userData.cubeOriginal.color?.getHexString?.()||'ffffff',roughness:mat.userData.cubeOriginal.roughness,metalness:mat.userData.cubeOriginal.metalness,transmission:mat.userData.cubeOriginal.transmission,ior:mat.userData.cubeOriginal.ior,thickness:mat.userData.cubeOriginal.thickness,transparent:mat.userData.cubeOriginal.transparent,opacity:mat.userData.cubeOriginal.opacity}:null,editorShader:mat.userData?.editorShader||'original',noiseScale:mat.userData?.noiseScale??12,noiseStrength:mat.userData?.noiseStrength??.22,emissionEnabled:mat.userData?.emissionEnabled===true,savedEmissionPower:mat.userData?.savedEmissionPower??mat.emissiveIntensity,wetSurface:!!mat.userData?.wetSurface,wetOriginal:mat.userData?.wetOriginal||null,baseTextureKey:mat.userData?.baseTextureKey||null,roughnessTextureKey:mat.userData?.roughnessTextureKey||null,normalTextureKey:mat.userData?.normalTextureKey||null,normalScale:mat.normalScale?.toArray?.()||[1,1]}))});}return rows;})(),
     intensity: object.intensity, lightColor:object.color?`#${object.color.getHexString()}`:null, distance: object.distance, angle: object.angle, penumbra: object.penumbra,
-    fov: object.fov, near: object.near, far: object.far
+    fov: object.fov, near: object.near, far: object.far, aspect:object.aspect, aspectMode:object.userData?.aspectMode||'viewport',outputAspect:object.userData?.outputAspect||object.aspect
   })) };
 }
 function projectList() { try { return JSON.parse(localStorage.getItem('editor3d:projects') || '[]'); } catch { return []; } }
@@ -585,10 +590,10 @@ function writeProjectList(items) { localStorage.setItem('editor3d:projects', JSO
 let historyTimer=null;
 function refreshHistoryButtons(){const undo=$('#undo'),redo=$('#redo');if(undo)undo.disabled=historyUndo.length<2;if(redo)redo.disabled=historyRedo.length===0;}
 function recordHistory(){if(restoringHistory||!currentProjectId)return;clearTimeout(historyTimer);historyTimer=null;const data=JSON.stringify(snapshot());if(historyUndo.at(-1)===data)return;historyUndo.push(data);if(historyUndo.length>60)historyUndo.shift();historyRedo.length=0;historyStamp=Date.now();refreshHistoryButtons();}
-function recordHistorySoon(){if(restoringHistory||!currentProjectId)return;clearTimeout(historyTimer);historyTimer=setTimeout(recordHistory,180);}
-async function applyHistorySnapshot(data){if(!data)return;restoringHistory=true;try{await loadScene(JSON.parse(data));}finally{restoringHistory=false;refreshHistoryButtons();}}
-async function undoScene(){clearTimeout(historyTimer);recordHistory();if(historyUndo.length<2){toast('No hay más cambios para deshacer');return;}const current=historyUndo.pop();historyRedo.push(current);await applyHistorySnapshot(historyUndo.at(-1));toast('Cambio deshecho');}
-async function redoScene(){clearTimeout(historyTimer);if(!historyRedo.length){toast('No hay cambios para rehacer');return;}const next=historyRedo.pop();historyUndo.push(next);await applyHistorySnapshot(next);toast('Cambio rehecho');}
+function recordHistorySoon(){if(restoringHistory||loadingProjectScene||!currentProjectId)return;clearTimeout(historyTimer);historyTimer=setTimeout(recordHistory,180);}
+async function applyHistorySnapshot(data){if(!data)return;const rollback=JSON.stringify(snapshot());restoringHistory=true;try{await loadScene(JSON.parse(data));}catch(error){console.error('Scene restore failed, reverting',error);try{await loadScene(JSON.parse(rollback));}catch(rollbackError){console.error('Scene rollback also failed',rollbackError);}throw error;}finally{clearTimeout(historyTimer);historyTimer=null;restoringHistory=false;refreshHistoryButtons();}}
+let historyOperationBusy=false;async function undoScene(){if(historyOperationBusy)return;historyOperationBusy=true;try{clearTimeout(historyTimer);recordHistory();if(historyUndo.length<2){toast('No hay más cambios para deshacer');return;}const current=historyUndo.at(-1),previous=historyUndo.at(-2);await applyHistorySnapshot(previous);historyUndo.pop();historyRedo.push(current);toast('Cambio deshecho');}catch(error){console.error('Undo failed',error);toast('No se pudo restaurar ese cambio; mantuve la escena para evitar perder objetos.');}finally{historyOperationBusy=false;refreshHistoryButtons();}}
+async function redoScene(){if(historyOperationBusy)return;historyOperationBusy=true;try{clearTimeout(historyTimer);if(!historyRedo.length){toast('No hay cambios para rehacer');return;}const next=historyRedo.at(-1);await applyHistorySnapshot(next);historyRedo.pop();historyUndo.push(next);toast('Cambio rehecho');}catch(error){console.error('Redo failed',error);toast('No se pudo restaurar ese cambio; mantuve la escena para evitar perder objetos.');}finally{historyOperationBusy=false;refreshHistoryButtons();}}
 let projectSaveTimer = null;
 let historyUndo=[];let historyRedo=[];let historyStamp=0;let restoringHistory=false;
 function scheduleProjectSave() { recordHistorySoon(); clearTimeout(projectSaveTimer); projectSaveTimer = setTimeout(saveCurrentProject, 350); }
@@ -618,11 +623,11 @@ function renderProjectCards() {
 async function openProject(id) {
   const project = projectList().find((item) => item.id === id);
   if (!project) return;
-  currentProjectId = id;
+  currentProjectId = id;clearTimeout(historyTimer);clearTimeout(projectSaveTimer);historyUndo=[];historyRedo=[];refreshHistoryButtons();
   localStorage.setItem('editor3d:last-project', id);
   $('#projectHome').hidden = true; $('#app').hidden = false;
   if (project.scene) await loadScene(project.scene);
-  if (!objects.length) addObject('Cubo');
+  if (!objects.length) addObject('Cubo');clearTimeout(historyTimer);historyTimer=null;historyUndo=[JSON.stringify(snapshot())];historyRedo=[];refreshHistoryButtons();
   $('#home').title = project.name; updateStatus();
 }
 function createProject() {
@@ -721,14 +726,14 @@ function captureRenderFrame(width, height) {
   try {
     renderer.setPixelRatio(1); renderer.setSize(width, height, false);
     composer.setPixelRatio(1); composer.setSize(width, height);
-    renderCamera.aspect = width / height; renderCamera.updateProjectionMatrix();
+    if(!cameraMode||!renderCamera.userData.aspectMode||renderCamera.userData.aspectMode==='viewport')renderCamera.aspect = width / height; renderCamera.updateProjectionMatrix();
     sceneRenderPass.camera = renderCamera;
     if (usePostPipeline()) composer.render(); else renderer.render(scene, renderCamera);
     return renderer.domElement.toDataURL('image/png');
   } finally {
     restoreGuides();
     renderer.setPixelRatio(oldRatio); renderer.setSize(oldSize.x, oldSize.y, false);
-    composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25)); composer.setSize(oldSize.x, oldSize.y);
+    composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 0.65)); composer.setSize(oldSize.x, oldSize.y);
     renderCamera.aspect = oldAspect; renderCamera.updateProjectionMatrix();
     sceneRenderPass.camera = cameraMode ? activeCamera : camera;
   }
@@ -771,7 +776,7 @@ async function exportMp4() {
   const oldPost=postEnabled,oldBloom=bloomPass.enabled,oldLightPost=lightPostPass.enabled;const restoreGuides=hideEditorGuidesForRender();renderCaptureActive=true;
   $('#renderStatus').textContent = `Renderizando MP4 ${width}×${height} · ${duration} s…`;
   try {
-    renderer.setPixelRatio(1); renderer.setSize(width, height, false); composer.setPixelRatio(1); composer.setSize(width, height); renderCamera.aspect = width / height; renderCamera.updateProjectionMatrix();sceneRenderPass.camera = renderCamera;
+    renderer.setPixelRatio(1); renderer.setSize(width, height, false); composer.setPixelRatio(1); composer.setSize(width, height); if(!cameraMode||!renderCamera.userData.aspectMode||renderCamera.userData.aspectMode==='viewport')renderCamera.aspect = width / height; renderCamera.updateProjectionMatrix();sceneRenderPass.camera = renderCamera;
     await output.start();
     const total = duration * fps;
     for (let index = 0; index < total; index++) {
@@ -787,7 +792,7 @@ async function exportMp4() {
     else download(name, blob, 'video/mp4');
     $('#renderStatus').textContent = 'MP4 H.264 exportado.'; toast('Render MP4 listo');
   } catch (error) { console.error(error); toast(`No se pudo renderizar MP4: ${error.message || error}`); $('#renderStatus').textContent = `Falló la exportación MP4: ${error.message || error}`; }
-  finally { renderCaptureActive=false;restoreGuides();postEnabled=oldPost;bloomPass.enabled=oldBloom;lightPostPass.enabled=oldLightPost;renderer.setPixelRatio(oldRatio);renderer.setSize(oldSize.x,oldSize.y,false);composer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.25));composer.setSize(oldSize.x,oldSize.y);renderCamera.aspect=oldAspect;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=cameraMode?activeCamera:camera;currentFrame=savedFrame;restoreScenePose(savedPose);updateFrameControls();if(wasPlaying)togglePlayback(); }
+  finally { renderCaptureActive=false;restoreGuides();postEnabled=oldPost;bloomPass.enabled=oldBloom;lightPostPass.enabled=oldLightPost;renderer.setPixelRatio(oldRatio);renderer.setSize(oldSize.x,oldSize.y,false);composer.setPixelRatio(Math.min(window.devicePixelRatio||1,0.65));composer.setSize(oldSize.x,oldSize.y);renderCamera.aspect=oldAspect;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=cameraMode?activeCamera:camera;currentFrame=savedFrame;restoreScenePose(savedPose);updateFrameControls();if(wasPlaying)togglePlayback(); }
 }
 async function exportMp4Native(duration) {
   const [width,height]=mobileVideoSize(), fps=15, total=duration*fps, renderCamera=cameraMode?activeCamera:camera;
@@ -795,12 +800,12 @@ async function exportMp4Native(duration) {
   const wasPlaying=isPlaying,savedFrame=currentFrame,savedPose=captureScenePose();if(isPlaying){isPlaying=false;clearInterval(playTimer);$('#playAnimation').textContent='▶';}
   const oldPost=postEnabled,oldBloom=bloomPass.enabled,oldLightPost=lightPostPass.enabled;const restoreGuides=hideEditorGuidesForRender();renderCaptureActive=true;
   try {
-    renderer.setPixelRatio(1);renderer.setSize(width,height,false);composer.setPixelRatio(1);composer.setSize(width,height);renderCamera.aspect=width/height;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=renderCamera;
+    renderer.setPixelRatio(1);renderer.setSize(width,height,false);composer.setPixelRatio(1);composer.setSize(width,height);if(!cameraMode||!renderCamera.userData.aspectMode||renderCamera.userData.aspectMode==='viewport')renderCamera.aspect=width/height;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=renderCamera;
     const started=await NativeRenderExport.startVideo({width,height,fps});if(started?.ready===false)throw new Error('El codificador no quedó iniciado');$('#renderStatus').textContent=`Renderizando MP4 ${width}×${height} · ${duration} s…`;
     for(let i=0;i<total;i++){if(keyframes.size)interpolatePose(i/Math.max(1,total-1)*120);else if(importedMixer&&importedAnimationAction){importedMixer.setTime(i/fps);currentModel?.updateMatrixWorld(true);}if(usePostPipeline())composer.render();else renderer.render(scene,renderCamera);const jpeg=renderer.domElement.toDataURL('image/jpeg',0.94).split(',')[1];await NativeRenderExport.addVideoFrame({jpeg});if(i%3===0){$('#renderStatus').textContent=`Renderizando MP4 · ${Math.floor((i+1)/total*100)}%`;await new Promise(resolve=>requestAnimationFrame(resolve));}}
     await NativeRenderExport.finishVideo();$('#renderStatus').textContent='MP4 guardado en la carpeta elegida.';toast('Exportación MP4 lista');
   } catch(error){console.error(error);try{await NativeRenderExport.abortVideo();}catch(_){}$('#renderStatus').textContent=`Falló la exportación MP4: ${error.message||error}`;toast(`No se pudo exportar MP4: ${error.message||error}`);}
-  finally{renderCaptureActive=false;restoreGuides();postEnabled=oldPost;bloomPass.enabled=oldBloom;lightPostPass.enabled=oldLightPost;renderer.setPixelRatio(oldRatio);renderer.setSize(oldSize.x,oldSize.y,false);composer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.25));composer.setSize(oldSize.x,oldSize.y);renderCamera.aspect=oldAspect;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=cameraMode?activeCamera:camera;currentFrame=savedFrame;restoreScenePose(savedPose);updateFrameControls();if(wasPlaying)togglePlayback();}
+  finally{renderCaptureActive=false;restoreGuides();postEnabled=oldPost;bloomPass.enabled=oldBloom;lightPostPass.enabled=oldLightPost;renderer.setPixelRatio(oldRatio);renderer.setSize(oldSize.x,oldSize.y,false);composer.setPixelRatio(Math.min(window.devicePixelRatio||1,0.65));composer.setSize(oldSize.x,oldSize.y);renderCamera.aspect=oldAspect;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=cameraMode?activeCamera:camera;currentFrame=savedFrame;restoreScenePose(savedPose);updateFrameControls();if(wasPlaying)togglePlayback();}
 }
 let renderFolderHandle = null;
 async function chooseRenderFolder() {
@@ -854,21 +859,35 @@ async function saveScene(){
   finally{button.disabled=false;button.textContent=original||'Guardar proyecto';}
 }
 
-function restoreMaterialSnapshots(root, rows) {
+async function restoreMaterialSnapshots(root, rows) {
   if(!Array.isArray(rows))return;const meshes=[];if(root.isMesh)meshes.push(root);root.traverse?.(node=>{if(node.isMesh)meshes.push(node);});
-  for(let i=0;i<Math.min(meshes.length,rows.length);i++){const mats=Array.isArray(meshes[i].material)?meshes[i].material:[meshes[i].material];const saved=rows[i].materials||[];for(let j=0;j<Math.min(mats.length,saved.length);j++){const mat=mats[j],state=saved[j];if(state.color)mat.color?.set(state.color);if('roughness'in mat)mat.roughness=THREE.MathUtils.clamp(Number.isFinite(state.roughness)?state.roughness:0.55,0.12,0.94);if(Number.isFinite(state.metalness)&&'metalness'in mat)mat.metalness=state.metalness;if(state.emissive)mat.emissive?.set(state.emissive);if(Number.isFinite(state.emissiveIntensity)&&'emissiveIntensity'in mat)mat.emissiveIntensity=state.emissiveIntensity;if(Number.isFinite(state.transmission)&&'transmission'in mat)mat.transmission=state.transmission;mat.userData ||= {};mat.userData.transparencyEnabled=state.transparencyEnabled===true;mat.userData.subsurfaceEnabled=state.subsurfaceEnabled===true;mat.userData.subsurfaceDepth=Number(state.subsurfaceDepth)||.18;mat.userData.originalTransparent=state.originalTransparent;mat.userData.savedOpacity=state.savedOpacity;if(Number.isFinite(state.ior)&&'ior'in mat)mat.ior=state.ior;if(Number.isFinite(state.thickness)&&'thickness'in mat)mat.thickness=state.thickness;if(typeof state.transparent==='boolean')mat.transparent=state.transparent;if(Number.isFinite(state.opacity))mat.opacity=state.opacity;if(state.cubeOriginal){mat.userData ||= {};mat.userData.cubeOriginal={...state.cubeOriginal,color:new THREE.Color(`#${String(state.cubeOriginal.color||'ffffff').replace('#','')}`)};}mat.userData ||= {};mat.userData.emissionEnabled=state.emissionEnabled===true;mat.userData.savedEmissionPower=THREE.MathUtils.clamp(Number(state.savedEmissionPower??(state.emissionEnabled?state.emissiveIntensity:0))||0,0,2);if(!mat.userData.emissionEnabled)mat.emissiveIntensity=0;else if(Number.isFinite(state.emissiveIntensity))mat.emissiveIntensity=THREE.MathUtils.clamp(state.emissiveIntensity,0,2);if(Number.isFinite(state.noiseScale)||Number.isFinite(state.noiseStrength)){mat.userData ||= {};mat.userData.noiseScale=Number(state.noiseScale)||12;mat.userData.noiseStrength=Number.isFinite(state.noiseStrength)?state.noiseStrength:.22;}if(state.editorShader)applyTextureShader(mat,state.editorShader);if(state.wetSurface){mat.userData ||= {};mat.userData.wetSurface=true;mat.userData.wetOriginal=state.wetOriginal||{roughness:mat.roughness??0.55,metalness:mat.metalness??0,envMapIntensity:1};}for(const [mapKey,keyName,legacyName] of [['map','baseTextureKey','baseTextureData'],['roughnessMap','roughnessTextureKey','roughnessTextureData'],['normalMap','normalTextureKey','normalTextureData']]){const assetKey=state[keyName];const legacy=state[legacyName];if(assetKey){mat.userData ||= {};mat.userData[keyName]=assetKey;getTextureAsset(assetKey).then(blob=>{if(!blob)return;const url=URL.createObjectURL(blob);new THREE.TextureLoader().load(url,texture=>{URL.revokeObjectURL(url);texture.colorSpace=mapKey==='map'?THREE.SRGBColorSpace:THREE.NoColorSpace;texture.wrapS=texture.wrapT=THREE.RepeatWrapping;mat[mapKey]=texture;mat.needsUpdate=true;},undefined,error=>{URL.revokeObjectURL(url);console.warn('Texture restore failed',error);});}).catch(error=>console.warn('Texture storage missing',assetKey,error));}else if(legacy){new THREE.TextureLoader().load(legacy,texture=>{texture.colorSpace=mapKey==='map'?THREE.SRGBColorSpace:THREE.NoColorSpace;mat[mapKey]=texture;mat.needsUpdate=true;});mat.userData ||= {};mat.userData[keyName]=null;const migration=fetch(legacy).then(r=>r.blob()).then(blob=>{const key=`tex-migrated-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;return storeTextureAsset(key,blob).then(()=>{mat.userData[keyName]=key;saveCurrentProject();});}).catch(error=>console.warn('Legacy texture migration failed',error));pendingAssetMigrations.add(migration);migration.finally(()=>pendingAssetMigrations.delete(migration));}}if(Array.isArray(state.normalScale)&&mat.normalScale)mat.normalScale.fromArray(state.normalScale);mat.needsUpdate=true;}}
+  const loader=new THREE.TextureLoader();
+  for(let i=0;i<Math.min(meshes.length,rows.length);i++){
+    const mats=Array.isArray(meshes[i].material)?meshes[i].material:[meshes[i].material],saved=rows[i].materials||[];
+    for(let j=0;j<Math.min(mats.length,saved.length);j++){
+      const mat=mats[j],state=saved[j];if(state.color)mat.color?.set(state.color);if('roughness'in mat)mat.roughness=THREE.MathUtils.clamp(Number.isFinite(state.roughness)?state.roughness:.55,.12,.94);if(Number.isFinite(state.metalness)&&'metalness'in mat)mat.metalness=state.metalness;if(state.emissive)mat.emissive?.set(state.emissive);if(Number.isFinite(state.emissiveIntensity)&&'emissiveIntensity'in mat)mat.emissiveIntensity=state.emissiveIntensity;if(Number.isFinite(state.transmission)&&'transmission'in mat)mat.transmission=state.transmission;mat.userData||={};mat.userData.transparencyEnabled=state.transparencyEnabled===true;mat.userData.subsurfaceEnabled=state.subsurfaceEnabled===true;mat.userData.subsurfaceDepth=Number(state.subsurfaceDepth)||.18;mat.userData.originalTransparent=state.originalTransparent;mat.userData.savedOpacity=state.savedOpacity;mat.userData.emissionEnabled=state.emissionEnabled===true;mat.userData.savedEmissionPower=THREE.MathUtils.clamp(Number(state.savedEmissionPower??(state.emissionEnabled?state.emissiveIntensity:0))||0,0,2);if(!mat.userData.emissionEnabled)mat.emissiveIntensity=0;else if(Number.isFinite(state.emissiveIntensity))mat.emissiveIntensity=THREE.MathUtils.clamp(state.emissiveIntensity,0,2);if(Number.isFinite(state.ior)&&'ior'in mat)mat.ior=state.ior;if(Number.isFinite(state.thickness)&&'thickness'in mat)mat.thickness=state.thickness;if(typeof state.transparent==='boolean')mat.transparent=state.transparent;if(Number.isFinite(state.opacity))mat.opacity=state.opacity;
+      if(state.cubeOriginal)mat.userData.cubeOriginal={...state.cubeOriginal,color:new THREE.Color(`#${String(state.cubeOriginal.color||'ffffff').replace('#','')}`)};
+      if(Number.isFinite(state.noiseScale)||Number.isFinite(state.noiseStrength)){mat.userData.noiseScale=Number(state.noiseScale)||12;mat.userData.noiseStrength=Number.isFinite(state.noiseStrength)?state.noiseStrength:.22;}if(state.editorShader)applyTextureShader(mat,state.editorShader);if(state.wetSurface){mat.userData.wetSurface=true;mat.userData.wetOriginal=state.wetOriginal||{roughness:mat.roughness??.55,metalness:mat.metalness??0,envMapIntensity:1};}
+      for(const [mapKey,keyName,legacyName] of [['map','baseTextureKey','baseTextureData'],['roughnessMap','roughnessTextureKey','roughnessTextureData'],['normalMap','normalTextureKey','normalTextureData']]){
+        const assetKey=state[keyName];let blob=null;if(assetKey){mat.userData[keyName]=assetKey;try{blob=await getTextureAsset(assetKey);}catch(error){console.warn('Texture restore read failed',assetKey,error);}}else if(state[legacyName]){try{blob=await(await fetch(state[legacyName])).blob();}catch(error){console.warn('Legacy texture read failed',error);}}
+        if(blob){const url=URL.createObjectURL(blob);try{const texture=await loader.loadAsync(url);texture.colorSpace=mapKey==='map'?THREE.SRGBColorSpace:THREE.NoColorSpace;texture.wrapS=texture.wrapT=THREE.RepeatWrapping;texture.generateMipmaps=true;texture.minFilter=THREE.LinearMipmapLinearFilter;texture.magFilter=THREE.LinearFilter;mat[mapKey]=texture;mat.needsUpdate=true;if(!assetKey){const key=`tex-migrated-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;await storeTextureAsset(key,blob);mat.userData[keyName]=key;}}finally{URL.revokeObjectURL(url);}}
+      }
+      if(Array.isArray(state.normalScale)&&mat.normalScale)mat.normalScale.fromArray(state.normalScale);mat.needsUpdate=true;
+    }
+  }
 }
 async function loadScene(data) {
   if(data.renderSettings){$('#postLook').value=data.renderSettings.postLook||'cinematic';postEnabled=!!data.renderSettings.postEnabled;realisticMode=data.renderSettings.realisticMode!==false;fastRenderMode=!!data.renderSettings.fastRenderMode;reflectionsEnabled=data.renderSettings.reflectionsEnabled!==false;softShadowsEnabled=!!data.renderSettings.softShadowsEnabled;$('#featureFastRender').checked=fastRenderMode;$('#featureReflections').checked=reflectionsEnabled;$('#featureSoftShadows').checked=softShadowsEnabled;scene.environment=realisticMode&&reflectionsEnabled?savedEnvironment:null;scene.environmentIntensity=realisticMode&&reflectionsEnabled?0.48:0;renderer.shadowMap.enabled=realisticMode&&softShadowsEnabled;renderer.shadowMap.type=THREE.PCFSoftShadowMap;$('#postToggle').textContent=fastRenderMode?'Rápido':'RA';$('#postToggle').classList.toggle('active',postEnabled);bloomPass.enabled=postEnabled;lightPostPass.enabled=postEnabled;gridVisible=data.renderSettings.gridVisible!==false;grid.visible=gridVisible;setTool(data.renderSettings.activeTool||'select');if(postEnabled)applyPostLook($('#postLook').value);}
   if(Array.isArray(data?.textureAssets))for(const asset of data.textureAssets)if(asset?.key&&asset?.data){const blob=asset.data.startsWith('data:')?await(await fetch(asset.data)).blob():new Blob([Uint8Array.from(atob(asset.data),c=>c.charCodeAt(0))],{type:asset.type||'image/png'});await storeTextureAsset(asset.key,blob);}
   if (Array.isArray(data?.modelAssets)) for (const asset of data.modelAssets) if (asset?.key&&asset?.data) { const binary=atob(asset.data); const bytes=new Uint8Array(binary.length); for(let i=0;i<bytes.length;i++) bytes[i]=binary.charCodeAt(i); await storeModelAsset(asset.key,new Blob([bytes],{type:asset.type||'model/gltf-binary'})); }
   if (data?.format !== 'editor-3d-scene' || !Array.isArray(data.objects)) throw new Error('Archivo de escena no válido');
+  for(const item of data.objects){if(item.kind==='Modelo'&&item.assetKey&&!await getModelAsset(item.assetKey))throw new Error(`Falta el modelo ${item.name||item.assetKey}; no borré la escena actual.`);for(const row of item.materials||[])for(const mat of row.materials||[])for(const keyName of ['baseTextureKey','roughnessTextureKey','normalTextureKey'])if(mat[keyName]&&!await getTextureAsset(mat[keyName]))throw new Error(`Falta una textura del objeto ${item.name||''}; no borré la escena actual.`);}
+  loadingProjectScene=true;
   clearTimeout(reflectionRefreshTimer);for(const state of wetSurfaces.values()){scene.remove(state.probe);state.target.dispose();}wetSurfaces.clear();reflectionDirty=false;reflectionRefreshDue=0;reflectionStatus('');
   for (const object of [...objects]) { scene.remove(object); if (object.userData.helper) scene.remove(object.userData.helper); }
   for (const marker of boneDots.values()){scene.remove(marker);marker.material?.dispose?.();}
   boneDots.clear();objects.length=0;assetObjects.length=0;keyframes.clear();animationTrackIds.clear();animationTrackCache=null;animationNodesCache=null;currentFrame=0;animationLoop=data.animation?.loop!==false;$('#animationLoop').checked=animationLoop;animationInterpolation=data.animation?.interpolation||'linear';if($('#animationInterpolation'))$('#animationInterpolation').value=animationInterpolation;activeAnimationTarget=null;selected = null; currentModel = null; boneTarget = null; importedMixer = null; importedClips = []; importedAnimationAction = null; viewCameraObject = null; $('#animationPanel').querySelector('.clip-box')?.remove();
   $('#enterCamera').hidden = true; if (cameraMode) exitCameraView();
-  loadingProjectScene = true;
   const modelItems=[];
   for (const item of data.objects.slice(0, 300)) {
     if(item.kind==='Modelo'){modelItems.push(item);continue;}
@@ -883,18 +902,18 @@ async function loadScene(data) {
     object.rotation.fromArray(Array.isArray(item.rotation) ? item.rotation : [0, 0, 0]);
     object.scale.fromArray(Array.isArray(item.scale) ? item.scale : [1, 1, 1]);
     if(item.geometryRecipe?.type==='roundedBox'){const [w,h,d]=item.geometryRecipe.size;object.geometry.dispose();object.userData.originalCubeGeometry=new THREE.BoxGeometry(w,h,d);object.geometry=roundedBoxGeometry(w,h,d,item.geometryRecipe.radius,5);object.userData.cubeFinish='rounded';}if(item.cubeFinish)object.userData.cubeFinish=item.cubeFinish;
-    restoreMaterialSnapshots(object,item.materials);
+    await restoreMaterialSnapshots(object,item.materials);
     if (object.isLight) { if(item.lightColor)object.color.set(item.lightColor); object.intensity = item.intensity ?? object.intensity; if ('distance' in object) object.distance = item.distance ?? object.distance; if ('angle' in object) object.angle = item.angle ?? object.angle; if ('penumbra' in object) object.penumbra = item.penumbra ?? object.penumbra; }
-    if (object.isCamera) { object.fov = item.fov || object.fov; object.near = item.near ? Math.max(0.005,item.near) : object.near; object.far = item.far || object.far; object.updateProjectionMatrix(); object.userData.helper?.update(); viewCameraObject = object; }
+    if (object.isCamera) { object.fov = item.fov || object.fov; object.near = item.near ? Math.max(0.005,item.near) : object.near; object.far = item.far || object.far; object.userData.aspectMode=item.aspectMode||'16:9';object.aspect=Number(item.outputAspect)||Number(item.aspect)||16/9;object.userData.outputAspect=object.aspect;object.updateProjectionMatrix(); object.userData.helper?.update(); viewCameraObject = object;addCameraVisual(object); }
   }
-  for(const item of modelItems){if(!item.assetKey)continue;try{const blob=await getModelAsset(item.assetKey);if(!blob)continue;const buffer=await blob.arrayBuffer();await new Promise((resolve,reject)=>new GLTFLoader().parse(buffer,'',(gltf)=>{const model=gltf.scene;model.name=safeName(item.name||'Modelo');model.userData.kind='Modelo';model.userData.assetKey=item.assetKey;model.position.fromArray(item.position||[0,0,0]);model.rotation.fromArray(item.rotation||[0,0,0]);model.scale.fromArray(item.scale||[1,1,1]);restoreMaterialSnapshots(model,item.materials);model.traverse(child=>{if(child.isMesh){child.castShadow=true;child.receiveShadow=true;}});scene.add(model);objects.push(model);if(realisticMode&&renderer.shadowMap.enabled)renderer.shadowMap.needsUpdate=true;animationNodesCache=null;currentModel=model;importedClips=gltf.animations||[];importedMixer=importedClips.length?new THREE.AnimationMixer(model):null;if(importedMixer)addImportedClipControls(importedClips,importedMixer);makeBoneMarkers(model);resolve();},reject));}catch(error){console.warn('Could not restore imported model',error);}}
+  for(const item of modelItems){if(!item.assetKey)continue;const blob=await getModelAsset(item.assetKey);if(!blob)throw new Error(`Falta el modelo ${item.name||item.assetKey} al restaurar la escena`);const buffer=await blob.arrayBuffer();await new Promise((resolve,reject)=>new GLTFLoader().parse(buffer,'',async gltf=>{try{const model=gltf.scene||gltf.scenes?.[0];if(!model)throw new Error('El modelo restaurado no tiene escena');model.name=safeName(item.name||'Modelo');model.userData.kind='Modelo';model.userData.assetKey=item.assetKey;model.position.fromArray(item.position||[0,0,0]);model.rotation.fromArray(item.rotation||[0,0,0]);model.scale.fromArray(item.scale||[1,1,1]);await restoreMaterialSnapshots(model,item.materials);model.traverse(child=>{if(child.isMesh){child.castShadow=true;child.receiveShadow=true;}});scene.add(model);objects.push(model);if(realisticMode&&renderer.shadowMap.enabled)renderer.shadowMap.needsUpdate=true;animationNodesCache=null;currentModel=model;importedClips=gltf.animations||[];importedMixer=importedClips.length?new THREE.AnimationMixer(model):null;if(importedMixer)addImportedClipControls(importedClips,importedMixer);makeBoneMarkers(model);resolve();}catch(error){reject(error);}},reject));}
   for(const pose of data.modelPoses||[]){const owner=objects.find(item=>item.userData.kind==='Modelo'&&(item.userData.assetKey||item.name)===pose.owner);let node=owner;for(const index of pose.path||[])node=node?.children?.[index];if(node?.isBone){node.position.fromArray(pose.position||[0,0,0]);node.quaternion.fromArray(pose.quaternion||[0,0,0,1]).normalize();node.scale.fromArray(pose.scale||[1,1,1]);}}
   if(Array.isArray(data.animation?.tracks)){for(const track of data.animation.tracks){let root=track.assetKey?objects.find(item=>item.userData?.assetKey===track.assetKey):null;if(!root&&track.ownerName)root=objects.find(item=>item.name===track.ownerName&&(!track.ownerKind||item.userData?.kind===track.ownerKind));if(!root)root=objects[track.objectIndex]||null;let node=root;for(const index of track.path||[])node=node?.children?.[index]||null;if(node)animationTrackIds.add(node.uuid);}}if(Array.isArray(data.animation?.keyframes)){const nodes=getAnimatableNodes();for(const row of data.animation.keyframes){const pose=new Map();for(const target of row.targets||[]){let node=null;if(Number.isInteger(target.objectIndex)){let root=target.assetKey?objects.find(item=>item.userData?.assetKey===target.assetKey):null;if(!root&&target.ownerName)root=objects.find(item=>item.name===target.ownerName&&(!target.ownerKind||item.userData?.kind===target.ownerKind));if(!root)root=objects[target.objectIndex]||null;node=root;for(const index of target.path||[])node=node?.children?.[index]||null;}if(!node)node=nodes.find(item=>(item.name||'')===target.name&&(item.isBone?target.kind==='bone':(item.userData?.kind||'Cubo')===target.owner));if(node)pose.set(node.uuid,target.transform);}if(pose.size)keyframes.set(Number(row.frame)||0,pose);}animationTrackCache=null;animationNodesCache=null;}
   currentFrame=Number(data.renderSettings?.currentFrame)||0;loadingProjectScene=false;if(keyframes.size)interpolatePose(currentFrame);restoreWetSurfaces();updateEmissionBloom();rebuildTimeline();updateFrameControls();
   if (viewCameraObject) $('#enterCamera').hidden = false;
   if(data.renderSettings?.selectedName){const previous=objects.find(item=>item.name===data.renderSettings.selectedName);if(previous)selected=previous;}
-  if(data.renderSettings?.activeCameraName){const previousCam=objects.find(item=>item.isCamera&&item.name===data.renderSettings.activeCameraName);if(previousCam)viewCameraObject=previousCam;}
-  refreshList();renderProperties();refreshAnimationNodePicker();renderAnimationTrackList();updateStatus();saveCurrentProject();if(data.renderSettings?.cameraMode&&viewCameraObject)enterCameraView(viewCameraObject);toast('Escena y modelos cargados');
+  if(data.renderSettings?.activeCameraName){const previousCam=objects.find(item=>item.isCamera&&item.name===data.renderSettings.activeCameraName);if(previousCam)viewCameraObject=previousCam;}for(const cam of objects.filter(item=>item.isCamera))if(!cam.userData.cameraVisual)addCameraVisual(cam);
+  refreshList();renderProperties();refreshAnimationNodePicker();renderAnimationTrackList();updateStatus();saveCurrentProject();if(data.renderSettings?.cameraMode&&viewCameraObject)enterCameraView(viewCameraObject);loadingProjectScene=false;toast('Escena y modelos cargados');
 }
 function addImportedClipControls(clips,mixer){
   $('#animationPanel').querySelector('.clip-box')?.remove();if(!mixer||!clips?.length)return;
@@ -1205,13 +1224,14 @@ function resize() {
   const aspect = rect.width / rect.height;
   camera.aspect = aspect;
   camera.updateProjectionMatrix();
-  for (const object of objects) if (object.isCamera) { object.aspect = aspect; object.updateProjectionMatrix(); object.userData.helper?.update(); }
-  if (cameraMode && activeCamera) { activeCamera.aspect = aspect; activeCamera.updateProjectionMatrix(); }
+  for (const object of objects) if (object.isCamera) { if(!object.userData.aspectMode||object.userData.aspectMode==='viewport')object.aspect=aspect;else object.aspect=Number(object.userData.outputAspect)||aspect; object.updateProjectionMatrix(); object.userData.helper?.update(); }
+  if (cameraMode && activeCamera && (!activeCamera.userData.aspectMode||activeCamera.userData.aspectMode==='viewport')) { activeCamera.aspect = aspect; activeCamera.updateProjectionMatrix(); }
 }
 function enterCameraView(selectedCamera = viewCameraObject) {
   if (!selectedCamera?.isCamera) { toast('Selecciona una cámara en la jerarquía'); return; }
   activeCamera = selectedCamera;
   cameraMode = true;
+  if(selectedCamera.userData.cameraVisual)selectedCamera.userData.cameraVisual.visible=false;
   sceneRenderPass.camera = activeCamera;
   $('#enterCamera').hidden = true;
   $('#exitCamera').hidden = false;
@@ -1221,6 +1241,7 @@ function enterCameraView(selectedCamera = viewCameraObject) {
 }
 function exitCameraView() {
   cameraMode = false;
+  if(viewCameraObject?.userData.cameraVisual)viewCameraObject.userData.cameraVisual.visible=true;
   activeCamera = camera;
   sceneRenderPass.camera = camera;
   $('#enterCamera').hidden = !viewCameraObject;
@@ -1379,10 +1400,10 @@ document.querySelectorAll('[data-tool]').forEach((button) => button.addEventList
 resize();
 renderProjectCards();
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){saveCurrentProject();if(pendingTextureImports.size)Promise.allSettled([...pendingTextureImports]).then(saveCurrentProject);}});window.addEventListener('pagehide',()=>saveCurrentProject());navigator.storage?.persist?.().catch(()=>{});
-function beginInteractiveMotion(){interactiveMotion=true;idleQualityBoost=false;adaptiveQualityStep=0;clearTimeout(adaptiveQualityTimer);try{const rect=container.getBoundingClientRect();adaptiveBaseRatio=Math.min(window.devicePixelRatio||1,1.25);const motionRatio=Math.max(.5,Math.min(.58,adaptiveBaseRatio*.5));renderer.setPixelRatio(motionRatio);renderer.setSize(rect.width,rect.height,false);composer.setPixelRatio(motionRatio);composer.setSize(rect.width,rect.height);}catch(error){console.warn('Adaptive preview fallback',error);}}
+function beginInteractiveMotion(){interactiveMotion=true;idleQualityBoost=false;adaptiveQualityStep=0;clearTimeout(adaptiveQualityTimer);try{const rect=container.getBoundingClientRect();adaptiveBaseRatio=Math.min(window.devicePixelRatio||1,1.25);const motionRatio=Math.max(.56,Math.min(.64,adaptiveBaseRatio*.6));renderer.setPixelRatio(motionRatio);renderer.setSize(rect.width,rect.height,false);composer.setPixelRatio(motionRatio);composer.setSize(rect.width,rect.height);}catch(error){console.warn('Adaptive preview fallback',error);}}
 function estimateSceneComplexity(){let vertices=0;for(const root of objects)root.traverse?.(node=>{if(node.isMesh)vertices+=node.geometry?.attributes?.position?.count||0;});return vertices;}
-function restingPixelRatio(){const rect=container.getBoundingClientRect(),area=Math.max(1,rect.width*rect.height),gpuBudget=560000,complexity=estimateSceneComplexity(),complexityScale=complexity>1800000?.68:complexity>900000?.78:complexity>400000?.9:1;return Math.max(.5,Math.min(.64,adaptiveBaseRatio,Math.sqrt(gpuBudget/area),adaptiveBaseRatio*complexityScale));}
-function endInteractiveMotion(){interactiveMotion=false;clearTimeout(adaptiveQualityTimer);adaptiveQualityTimer=setTimeout(()=>{if(interactiveMotion||document.visibilityState==='hidden'||isPlaying||importedAnimationAction)return;try{const rect=container.getBoundingClientRect(),target=restingPixelRatio(),steps=[.55,.6,.64];const ratio=Math.min(target,steps[Math.min(adaptiveQualityStep++,steps.length-1)]*Math.min(window.devicePixelRatio||1,1.25));renderer.setPixelRatio(ratio);renderer.setSize(rect.width,rect.height,false);composer.setPixelRatio(ratio);composer.setSize(rect.width,rect.height);if(ratio+0.005<target){adaptiveQualityTimer=setTimeout(endInteractiveMotion,120);}else idleQualityBoost=realisticMode;}catch(error){idleQualityBoost=false;console.warn('High-quality idle mode skipped to protect device',error);}},550);}
+function restingPixelRatio(){const rect=container.getBoundingClientRect(),area=Math.max(1,rect.width*rect.height),gpuBudget=760000,complexity=estimateSceneComplexity(),complexityScale=complexity>1800000?.68:complexity>900000?.78:complexity>400000?.9:1;return Math.max(.5,Math.min(.74,adaptiveBaseRatio,Math.sqrt(gpuBudget/area),adaptiveBaseRatio*complexityScale));}
+function endInteractiveMotion(){interactiveMotion=false;clearTimeout(adaptiveQualityTimer);adaptiveQualityTimer=setTimeout(()=>{if(interactiveMotion||document.visibilityState==='hidden'||isPlaying||importedAnimationAction)return;try{const rect=container.getBoundingClientRect(),target=restingPixelRatio(),steps=[.64,.7,.74];const ratio=Math.min(target,steps[Math.min(adaptiveQualityStep++,steps.length-1)]*Math.min(window.devicePixelRatio||1,.9));renderer.setPixelRatio(ratio);renderer.setSize(rect.width,rect.height,false);composer.setPixelRatio(ratio);composer.setSize(rect.width,rect.height);if(ratio+0.005<target){adaptiveQualityTimer=setTimeout(endInteractiveMotion,120);}else idleQualityBoost=realisticMode;}catch(error){idleQualityBoost=false;console.warn('High-quality idle mode skipped to protect device',error);}},550);}
 renderer.domElement.addEventListener('webglcontextlost',event=>{event.preventDefault();glContextAvailable=false;idleQualityBoost=false;interactiveMotion=true;clearTimeout(adaptiveQualityTimer);toast('La escena es pesada para el dispositivo; reduje la calidad para evitar el cierre.');});
 renderer.domElement.addEventListener('webglcontextrestored',()=>{glContextAvailable=true;interactiveMotion=false;endInteractiveMotion();});
 let lastRenderTimestamp=0;
