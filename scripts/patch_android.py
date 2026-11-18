@@ -49,6 +49,7 @@ public class RenderExportPlugin extends Plugin {{
   private static final String TREE_KEY = "tree_uri";
   private static final String PROJECT_TREE_KEY = "project_tree_uri";
   private static MediaCodec videoEncoder; private static MediaMuxer videoMuxer; private static File videoTemp; private static int videoFrame, videoWidth, videoHeight, videoFps; private static int videoTrack = -1; private static int videoColorFormat; private static boolean videoMuxerStarted = false;
+  private InputStream projectImportStream; private String projectImportUri; private long projectImportOffset = 0;
 
   @PluginMethod
   public void chooseFolder(PluginCall call) {{
@@ -113,6 +114,60 @@ public class RenderExportPlugin extends Plugin {{
       try(InputStream input=getContext().getContentResolver().openInputStream(uri)) {{ if(input==null)throw new IllegalStateException("Could not open project file");byte[] buffer=new byte[65536];int count;while((count=input.read(buffer))!=-1)bytes.write(buffer,0,count); }}
       JSObject ret=new JSObject();ret.put("name",queryName(uri));ret.put("data",Base64.encodeToString(bytes.toByteArray(),Base64.NO_WRAP));call.resolve(ret);
     }} catch(Exception e) {{ call.reject("Could not read project file: "+e.getMessage(),e); }}
+  }}
+
+  @PluginMethod
+  public void readProjectFileInfo(PluginCall call) {{
+    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+    intent.addCategory(Intent.CATEGORY_OPENABLE); intent.setType("*/*");
+    intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{{"application/json","application/octet-stream","application/zip","model/gltf-binary","model/gltf+json"}});
+    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+    startActivityForResult(call, intent, "projectFileInfoPicked");
+  }}
+
+  @ActivityCallback
+  private void projectFileInfoPicked(PluginCall call, ActivityResult result) {{
+    if (call == null) return;
+    if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {{ call.reject("canceled"); return; }}
+    Uri uri = result.getData().getData();
+    try {{
+      int flags = result.getData().getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
+      try {{ getContext().getContentResolver().takePersistableUriPermission(uri, flags); }} catch(Exception ignored) {{}}
+      long size = -1;
+      try (android.content.res.AssetFileDescriptor fd = getContext().getContentResolver().openAssetFileDescriptor(uri, "r")) {{ if(fd != null) size = fd.getLength(); }} catch(Exception ignored) {{}}
+      if(size < 0) try (Cursor cursor = getContext().getContentResolver().query(uri, new String[]{{"_size"}}, null, null, null)) {{ if(cursor != null && cursor.moveToFirst()) size = cursor.getLong(0); }} catch(Exception ignored) {{}}
+      if(size < 0) throw new IllegalStateException("No pude determinar el tamaño del archivo.");
+      if(projectImportStream != null) try {{ projectImportStream.close(); }} catch(Exception ignored) {{}}
+      projectImportStream = getContext().getContentResolver().openInputStream(uri); projectImportUri = uri.toString(); projectImportOffset = 0;
+      if(projectImportStream == null) throw new IllegalStateException("Could not open selected file");
+      JSObject ret = new JSObject(); ret.put("name", queryName(uri)); ret.put("size", size); ret.put("uri", uri.toString()); call.resolve(ret);
+    }} catch(Exception e) {{ call.reject("Could not inspect project file: " + e.getMessage(), e); }}
+  }}
+
+  @PluginMethod
+  public void readProjectFileChunk(PluginCall call) {{
+    String value = call.getString("uri"); int offset = call.getInt("offset", 0); int length = call.getInt("length", 1048576);
+    if(value == null || offset < 0 || length < 1 || length > 1048576) {{ call.reject("Invalid file chunk request"); return; }}
+    try {{
+      if(projectImportStream == null || !value.equals(projectImportUri)) throw new IllegalStateException("Selected file stream is no longer open; select it again");
+      if(projectImportOffset != offset) {{
+        try {{ projectImportStream.close(); }} catch(Exception ignored) {{}}
+        projectImportStream = getContext().getContentResolver().openInputStream(Uri.parse(value)); projectImportOffset = 0;
+        if(projectImportStream == null) throw new IllegalStateException("Could not reopen selected file");
+        long skipped = 0; while(skipped < offset) {{ long n = projectImportStream.skip(offset - skipped); if(n <= 0) {{ if(projectImportStream.read() == -1) break; n = 1; }} skipped += n; }} projectImportOffset = skipped;
+      }}
+      byte[] chunk = new byte[length]; int count = 0;
+      while(count < length) {{ int n = projectImportStream.read(chunk, count, length - count); if(n < 0) break; count += n; }}
+      projectImportOffset += count;
+      byte[] result = count == length ? chunk : Arrays.copyOf(chunk, count);
+      JSObject ret = new JSObject(); ret.put("data", Base64.encodeToString(result, Base64.NO_WRAP)); ret.put("length", count); call.resolve(ret);
+    }} catch(Exception e) {{ call.reject("Could not read project file chunk: " + e.getMessage(), e); }}
+  }}
+
+  @PluginMethod
+  public void closeProjectFile(PluginCall call) {{
+    try {{ if(projectImportStream != null) projectImportStream.close(); }} catch(Exception ignored) {{}}
+    projectImportStream = null; projectImportUri = null; projectImportOffset = 0; call.resolve();
   }}
 
   @PluginMethod
