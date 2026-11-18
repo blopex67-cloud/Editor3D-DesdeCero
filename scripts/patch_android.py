@@ -95,7 +95,8 @@ public class RenderExportPlugin extends Plugin {{
   @PluginMethod
   public void readProjectFile(PluginCall call) {{
     Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-    intent.addCategory(Intent.CATEGORY_OPENABLE); intent.setType("application/json");
+    intent.addCategory(Intent.CATEGORY_OPENABLE); intent.setType("*/*");
+    intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{{"application/json","application/octet-stream","model/gltf-binary","model/gltf+json","image/jpeg","image/png"}});
     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
     startActivityForResult(call, intent, "projectFilePicked");
   }}
