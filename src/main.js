@@ -169,7 +169,7 @@ const pendingAssetMigrations = new Set();
 let emissiveBloomActive = false;
 let renderCaptureActive=false;
 let realisticMode=true;let savedEnvironment=scene.environment;let savedExposure=renderer.toneMappingExposure;
-let animationTrackCache=null;
+let animationTrackCache=null;let animationNodesCache=null;
 let sharedBoneMarkerGeometry=null;
 function toast(message) {
   const element = $('#toast');
@@ -720,13 +720,13 @@ async function exportMp4() {
     return;
   }
   const [width, height] = mobileVideoSize();
-  const config = { codec: 'avc1.640028', width, height, bitrate: 2500000, framerate: 20 };
+  const config = { codec: 'avc1.640028', width, height, bitrate: 2000000, framerate: 15 };
   let support = await VideoEncoder.isConfigSupported(config).catch(() => null);
-  if(!support?.supported){config.codec='avc1.42001f';config.bitrate=1800000;config.framerate=18;support=await VideoEncoder.isConfigSupported(config).catch(()=>null);}
+  if(!support?.supported){config.codec='avc1.42001f';config.bitrate=1400000;config.framerate=15;support=await VideoEncoder.isConfigSupported(config).catch(()=>null);}
   if (!support?.supported) { $('#renderStatus').textContent = 'El dispositivo no ofrece H.264 para MP4 en este WebView; no se guardó un video con extensión incorrecta.'; toast('Codificador MP4 no disponible'); return; }
   const target = new BufferTarget();
   const output = new Output({ format: new Mp4OutputFormat(), target });
-  const renderCanvas = renderer.domElement;
+  const renderCanvas = document.createElement('canvas');renderCanvas.width=width;renderCanvas.height=height;const renderContext=renderCanvas.getContext('2d',{alpha:false});
   const videoSource = new CanvasSource(renderCanvas, { codec: 'avc', quality: new Quality({ bitrate: config.bitrate }) });
   const fps = config.framerate; output.addVideoTrack(videoSource, { frameRate: fps });
   const oldSize = new THREE.Vector2(); renderer.getSize(oldSize); const oldRatio = renderer.getPixelRatio(); const renderCamera = cameraMode ? activeCamera : camera; const oldAspect = renderCamera.aspect;
@@ -741,7 +741,7 @@ async function exportMp4() {
       if (keyframes.size) interpolatePose(index / Math.max(1, total - 1) * 120);
       else if (importedMixer && importedAnimationAction) { importedMixer.setTime(index / fps); currentModel?.updateMatrixWorld(true); }
       if (usePostPipeline()) composer.render(); else renderer.render(scene, renderCamera);
-      await videoSource.add(index / fps, 1 / fps);
+      renderContext.drawImage(renderer.domElement,0,0,width,height);await videoSource.add(index / fps, 1 / fps);
       if (index % 10 === 0) { $('#renderStatus').textContent = `Renderizando MP4 · ${Math.floor(index / total * 100)}%`; await new Promise((resolve) => requestAnimationFrame(resolve)); }
     }
     await output.finalize();
@@ -750,10 +750,10 @@ async function exportMp4() {
     else download(name, blob, 'video/mp4');
     $('#renderStatus').textContent = 'MP4 H.264 exportado.'; toast('Render MP4 listo');
   } catch (error) { console.error(error); toast(`No se pudo renderizar MP4: ${error.message || error}`); $('#renderStatus').textContent = `Falló la exportación MP4: ${error.message || error}`; }
-  finally { renderCaptureActive=false;restoreGuides();postEnabled=oldPost;bloomPass.enabled=oldBloom;lightPostPass.enabled=oldLightPost;renderer.setPixelRatio(oldRatio);renderer.setSize(oldSize.x,oldSize.y,false);composer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.25));composer.setSize(oldSize.x,oldSize.y);renderCamera.aspect=oldAspect;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=cameraMode?activeCamera:camera;currentFrame=savedFrame;restoreScenePose(savedPose);if(wasPlaying)togglePlayback(); }
+  finally { renderCaptureActive=false;restoreGuides();postEnabled=oldPost;bloomPass.enabled=oldBloom;lightPostPass.enabled=oldLightPost;renderer.setPixelRatio(oldRatio);renderer.setSize(oldSize.x,oldSize.y,false);composer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.25));composer.setSize(oldSize.x,oldSize.y);renderCamera.aspect=oldAspect;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=cameraMode?activeCamera:camera;currentFrame=savedFrame;restoreScenePose(savedPose);updateFrameControls();if(wasPlaying)togglePlayback(); }
 }
 async function exportMp4Native(duration) {
-  const [width,height]=mobileVideoSize(), fps=24, total=duration*fps, renderCamera=cameraMode?activeCamera:camera;
+  const [width,height]=mobileVideoSize(), fps=15, total=duration*fps, renderCamera=cameraMode?activeCamera:camera;
   const oldSize=new THREE.Vector2();renderer.getSize(oldSize);const oldRatio=renderer.getPixelRatio(),oldAspect=renderCamera.aspect;
   const wasPlaying=isPlaying,savedFrame=currentFrame,savedPose=captureScenePose();if(isPlaying){isPlaying=false;clearInterval(playTimer);$('#playAnimation').textContent='▶';}
   const oldPost=postEnabled,oldBloom=bloomPass.enabled,oldLightPost=lightPostPass.enabled;const restoreGuides=hideEditorGuidesForRender();renderCaptureActive=true;
@@ -763,7 +763,7 @@ async function exportMp4Native(duration) {
     for(let i=0;i<total;i++){if(keyframes.size)interpolatePose(i/Math.max(1,total-1)*120);else if(importedMixer&&importedAnimationAction){importedMixer.setTime(i/fps);currentModel?.updateMatrixWorld(true);}if(usePostPipeline())composer.render();else renderer.render(scene,renderCamera);const jpeg=renderer.domElement.toDataURL('image/jpeg',0.94).split(',')[1];await NativeRenderExport.addVideoFrame({jpeg});if(i%3===0){$('#renderStatus').textContent=`Renderizando MP4 · ${Math.floor((i+1)/total*100)}%`;await new Promise(resolve=>requestAnimationFrame(resolve));}}
     await NativeRenderExport.finishVideo();$('#renderStatus').textContent='MP4 guardado en la carpeta elegida.';toast('Exportación MP4 lista');
   } catch(error){console.error(error);try{await NativeRenderExport.abortVideo();}catch(_){}$('#renderStatus').textContent=`Falló la exportación MP4: ${error.message||error}`;toast(`No se pudo exportar MP4: ${error.message||error}`);}
-  finally{renderCaptureActive=false;restoreGuides();postEnabled=oldPost;bloomPass.enabled=oldBloom;lightPostPass.enabled=oldLightPost;renderer.setPixelRatio(oldRatio);renderer.setSize(oldSize.x,oldSize.y,false);composer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.25));composer.setSize(oldSize.x,oldSize.y);renderCamera.aspect=oldAspect;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=cameraMode?activeCamera:camera;currentFrame=savedFrame;restoreScenePose(savedPose);if(wasPlaying)togglePlayback();}
+  finally{renderCaptureActive=false;restoreGuides();postEnabled=oldPost;bloomPass.enabled=oldBloom;lightPostPass.enabled=oldLightPost;renderer.setPixelRatio(oldRatio);renderer.setSize(oldSize.x,oldSize.y,false);composer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.25));composer.setSize(oldSize.x,oldSize.y);renderCamera.aspect=oldAspect;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=cameraMode?activeCamera:camera;currentFrame=savedFrame;restoreScenePose(savedPose);updateFrameControls();if(wasPlaying)togglePlayback();}
 }
 let renderFolderHandle = null;
 async function chooseRenderFolder() {
@@ -829,7 +829,7 @@ async function loadScene(data) {
   clearTimeout(reflectionRefreshTimer);for(const state of wetSurfaces.values()){scene.remove(state.probe);state.target.dispose();}wetSurfaces.clear();reflectionDirty=false;reflectionRefreshDue=0;reflectionStatus('');
   for (const object of [...objects]) { scene.remove(object); if (object.userData.helper) scene.remove(object.userData.helper); }
   for (const marker of boneDots.values()){scene.remove(marker);marker.material?.dispose?.();}
-  boneDots.clear();objects.length=0;assetObjects.length=0;keyframes.clear();animationTrackCache=null;currentFrame=0;animationLoop=data.animation?.loop!==false;$('#animationLoop').checked=animationLoop;selected = null; currentModel = null; boneTarget = null; importedMixer = null; importedClips = []; importedAnimationAction = null; viewCameraObject = null; $('#animationPanel').querySelector('.clip-box')?.remove();
+  boneDots.clear();objects.length=0;assetObjects.length=0;keyframes.clear();animationTrackCache=null;animationNodesCache=null;currentFrame=0;animationLoop=data.animation?.loop!==false;$('#animationLoop').checked=animationLoop;selected = null; currentModel = null; boneTarget = null; importedMixer = null; importedClips = []; importedAnimationAction = null; viewCameraObject = null; $('#animationPanel').querySelector('.clip-box')?.remove();
   $('#enterCamera').hidden = true; if (cameraMode) exitCameraView();
   loadingProjectScene = true;
   const modelItems=[];
@@ -852,7 +852,7 @@ async function loadScene(data) {
   }
   for(const item of modelItems){if(!item.assetKey)continue;try{const blob=await getModelAsset(item.assetKey);if(!blob)continue;const buffer=await blob.arrayBuffer();await new Promise((resolve,reject)=>new GLTFLoader().parse(buffer,'',(gltf)=>{const model=gltf.scene;model.name=safeName(item.name||'Modelo');model.userData.kind='Modelo';model.userData.assetKey=item.assetKey;model.position.fromArray(item.position||[0,0,0]);model.rotation.fromArray(item.rotation||[0,0,0]);model.scale.fromArray(item.scale||[1,1,1]);restoreMaterialSnapshots(model,item.materials);model.traverse(child=>{if(child.isMesh){child.castShadow=true;child.receiveShadow=true;}});scene.add(model);objects.push(model);currentModel=model;importedClips=gltf.animations||[];importedMixer=importedClips.length?new THREE.AnimationMixer(model):null;if(importedMixer)addImportedClipControls(importedClips,importedMixer);makeBoneMarkers(model);resolve();},reject));}catch(error){console.warn('Could not restore imported model',error);}}
   for(const pose of data.modelPoses||[]){const owner=objects.find(item=>item.userData.kind==='Modelo'&&(item.userData.assetKey||item.name)===pose.owner);let node=owner;for(const index of pose.path||[])node=node?.children?.[index];if(node?.isBone){node.position.fromArray(pose.position||[0,0,0]);node.quaternion.fromArray(pose.quaternion||[0,0,0,1]).normalize();node.scale.fromArray(pose.scale||[1,1,1]);}}
-  if(Array.isArray(data.animation?.keyframes)){const nodes=[...objects,...allBones()];for(const row of data.animation.keyframes){const pose=new Map();for(const target of row.targets||[]){let node=null;if(Number.isInteger(target.objectIndex)){node=objects[target.objectIndex]||null;for(const index of target.path||[])node=node?.children?.[index]||null;}if(!node)node=nodes.find(item=>(item.name||'')===target.name&&(item.isBone?target.kind==='bone':(item.userData?.kind||'Cubo')===target.owner));if(node)pose.set(node.uuid,target.transform);}if(pose.size)keyframes.set(Number(row.frame)||0,pose);}animationTrackCache=null;}
+  if(Array.isArray(data.animation?.keyframes)){const nodes=[...objects,...allBones()];for(const row of data.animation.keyframes){const pose=new Map();for(const target of row.targets||[]){let node=null;if(Number.isInteger(target.objectIndex)){node=objects[target.objectIndex]||null;for(const index of target.path||[])node=node?.children?.[index]||null;}if(!node)node=nodes.find(item=>(item.name||'')===target.name&&(item.isBone?target.kind==='bone':(item.userData?.kind||'Cubo')===target.owner));if(node)pose.set(node.uuid,target.transform);}if(pose.size)keyframes.set(Number(row.frame)||0,pose);}animationTrackCache=null;animationNodesCache=null;}
   currentFrame=Number(data.renderSettings?.currentFrame)||0;loadingProjectScene=false;restoreWetSurfaces();emissiveBloomActive=hasEmissiveMeshes();usePostPipeline();rebuildTimeline();updateFrameControls();
   if (viewCameraObject) $('#enterCamera').hidden = false;
   if(data.renderSettings?.selectedName){const previous=objects.find(item=>item.name===data.renderSettings.selectedName);if(previous)selected=previous;}
@@ -1155,7 +1155,7 @@ function captureKeyframe() {
   currentModel?.updateMatrixWorld(true);
   for(const object of objects)pose.set(object.uuid,readTransform(object));
   for(const bone of allBones())pose.set(bone.uuid,readTransform(bone));
-  keyframes.set(frame, pose);animationTrackCache=null;
+  keyframes.set(frame, pose);animationTrackCache=null;animationNodesCache=null;
   scheduleProjectSave();recordHistory();rebuildTimeline();
   updateFrameControls();
   toast(`Keyframe de ${target.name || 'objeto'} · fotograma ${frame}`);
@@ -1176,11 +1176,11 @@ function buildAnimationTrackCache(){
   const tracks=new Map();
   for(const [frame,pose] of keyframes){for(const [uuid,transform] of pose){if(!tracks.has(uuid))tracks.set(uuid,[]);tracks.get(uuid).push([frame,transform]);}}
   for(const list of tracks.values())list.sort((a,b)=>a[0]-b[0]);
-  animationTrackCache=tracks;return tracks;
+  animationTrackCache=tracks;animationNodesCache=new Map([...objects,...allBones()].map(node=>[node.uuid,node]));return tracks;
 }
 function interpolatePose(frame) {
   const tracks=animationTrackCache||buildAnimationTrackCache();
-  const nodes=new Map([...objects,...allBones()].map(node=>[node.uuid,node]));
+  const nodes=animationNodesCache||(animationNodesCache=new Map([...objects,...allBones()].map(node=>[node.uuid,node])));
   for(const [uuid,available] of tracks){
     const node=nodes.get(uuid);if(!node||available.length<2)continue;
     let lo=0,hi=available.length;while(lo<hi){const mid=(lo+hi)>>1;if(available[mid][0]<frame)lo=mid+1;else hi=mid;}
