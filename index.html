@@ -10,7 +10,7 @@
   <div id="brandSplash" role="status" aria-label="Software Volumi3d iniciando"><div class="splash-card"><img src="/volumi3d-logo.png" alt="Logo Volumi3d"><strong>Software Volumi3d</strong><span>Iniciando editor…</span><i><b></b></i></div></div>
   <div id="projectHome" class="project-home">
     <header class="home-header"><div class="home-logo" aria-label="Software Volumi3d"><span>Software</span><b>Volumi3d</b></div><div><b>Software Volumi3d</b><small>Proyectos</small></div><button id="createProject">＋ Nuevo proyecto</button></header>
-    <section class="home-content"><div class="home-title"><h1>Mis proyectos</h1><p>Crea una escena nueva o retoma tu trabajo.</p><button id="importProjectHome">Importar proyecto guardado</button><input id="projectFileInput" type="file" accept=".json,.editor3d.json,application/json" hidden></div><div class="project-grid" id="projectGrid"></div><div class="empty-projects" id="emptyProjects"><div>▧</div><b>Aún no hay proyectos</b><span>Crea tu primer proyecto para empezar.</span><button id="createProjectEmpty">＋ Crear proyecto</button></div><div class="project-dialog" id="projectDialog" hidden><div class="project-dialog-card"><b>Nuevo proyecto</b><span>Dale un nombre a tu escena 3D.</span><input id="projectNameInput" type="text" maxlength="40" placeholder="Mi proyecto 3D"><div><button id="cancelProject">Cancelar</button><button id="confirmProject">Crear proyecto</button></div></div></div></section>
+    <section class="home-content"><div class="home-title"><h1>Mis proyectos</h1><p>Crea una escena nueva o retoma tu trabajo.</p><button id="importProjectHome">Importar proyecto guardado</button><input id="projectFileInput" type="file" accept=".json,.editor3d.json,.proj,.prisma,.zip,application/json,application/zip,application/octet-stream" hidden></div><div class="project-grid" id="projectGrid"></div><div class="empty-projects" id="emptyProjects"><div>▧</div><b>Aún no hay proyectos</b><span>Crea tu primer proyecto para empezar.</span><button id="createProjectEmpty">＋ Crear proyecto</button></div><div class="project-dialog" id="projectDialog" hidden><div class="project-dialog-card"><b>Nuevo proyecto</b><span>Dale un nombre a tu escena 3D.</span><input id="projectNameInput" type="text" maxlength="40" placeholder="Mi proyecto 3D"><div><button id="cancelProject">Cancelar</button><button id="confirmProject">Crear proyecto</button></div></div></div></section>
   </div>
   <div id="app" hidden>
     <header class="topbar">
@@ -77,7 +77,7 @@
       </aside>
     </main>
     <footer><span>Software Volumi3d</span><span id="status">Listo</span></footer>
-    <input id="fileInput" type="file" accept=".json,.glb,.gltf,.fbx,.obj,.mtl,.stl,.ply,.prisma,model/gltf-binary,model/gltf+json" multiple hidden>
+    <input id="fileInput" type="file" accept=".json,.glb,.gltf,.fbx,.obj,.mtl,.stl,.ply,.proj,.prisma,.zip,application/zip,model/gltf-binary,model/gltf+json,application/octet-stream" multiple hidden>
   </div>
   <script type="module" src="/src/main.js"></script>
   <script>
