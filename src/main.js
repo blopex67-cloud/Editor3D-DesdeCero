@@ -30,6 +30,8 @@ let currentFrame = 0;
 let isPlaying = false;
 let playTimer = null;
 let currentModel = null;
+let materialTargetUuid = null;
+let animationLoop = true;
 let importedMixer = null;
 let importedClips = [];
 let importedAnimationAction = null;
@@ -120,7 +122,7 @@ scene.add(sun);
 const grid = new THREE.GridHelper(20, 40, 0x96999d, 0x606266);
 grid.position.y = -0.01;
 scene.add(grid);
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: '#343537', roughness: 1 }));
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: '#292a2c', roughness: 0.32, metalness: 0.06 }));
 ground.rotation.x = -Math.PI / 2;
 ground.position.y = -0.025;
 ground.receiveShadow = true;
@@ -133,9 +135,9 @@ composer.addPass(sceneRenderPass);
 const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.24, 0.35, 0.88);
 composer.addPass(bloomPass);
 const lightPostPass = new ShaderPass({
-  uniforms: { tDiffuse: { value: null }, time: { value: 0 }, grain: { value: 0.018 }, vignette: { value: 0.18 } },
+  uniforms: { tDiffuse: { value: null }, time: { value: 0 }, grain: { value: 0.012 }, vignette: { value: 0.22 }, contrast: { value: 1.16 }, saturation: { value: 0.92 }, warmth: { value: 0.035 } },
   vertexShader: `varying vec2 vUv; void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
-  fragmentShader: `uniform sampler2D tDiffuse;uniform float time;uniform float grain;uniform float vignette;varying vec2 vUv;float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7))+time*17.0)*43758.5453);}void main(){vec4 c=texture2D(tDiffuse,vUv);float n=(hash(gl_FragCoord.xy)-0.5)*grain;float v=1.0-vignette*smoothstep(0.28,0.78,distance(vUv,vec2(0.5)));c.rgb=c.rgb*v+n;gl_FragColor=c;}`
+  fragmentShader: `uniform sampler2D tDiffuse;uniform float time;uniform float grain;uniform float vignette;uniform float contrast;uniform float saturation;uniform float warmth;varying vec2 vUv;float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7))+time*17.0)*43758.5453);}void main(){vec4 c=texture2D(tDiffuse,vUv);float n=(hash(gl_FragCoord.xy)-0.5)*grain;float v=1.0-vignette*smoothstep(0.28,0.78,distance(vUv,vec2(0.5)));float lum=dot(c.rgb,vec3(0.2126,0.7152,0.0722));c.rgb=mix(vec3(lum),c.rgb,saturation);c.rgb=(c.rgb-0.5)*contrast+0.5;c.rgb+=vec3(warmth*0.85,warmth*0.22,-warmth*0.35);c.rgb=c.rgb*v+n;gl_FragColor=c;}`
 });
 composer.addPass(lightPostPass);
 composer.addPass(new OutputPass());
@@ -284,24 +286,28 @@ function renderProperties() {
   const r = selected.rotation;
   const s = selected.scale;
   const cameraAction = selected.isCamera ? `<button id="selectedCameraView">Mirar por esta cámara</button>` : '';
-  const renderMaterial = selected.material;
-  const emission = renderMaterial?.emissive ? `<div class="section-label">EMISIÓN</div><label class="prop-label">Color emisión<input id="emissionColor" type="color"></label><label class="prop-label">Intensidad<input id="emissionIntensity" type="number" min="0" max="10" step="0.1" value="${renderMaterial.emissiveIntensity || 0}"></label>` : '';
-  props.innerHTML = `${cameraAction}<label class="prop-label">Nombre<input id="objectName" type="text" maxlength="50"></label>
-    <label class="prop-label">Color<input id="objectColor" type="color"></label>
-    ${emission}<div class="section-label">POSICIÓN</div>${field('X', 0, p.x, 'position')}${field('Y', 1, p.y, 'position')}${field('Z', 2, p.z, 'position')}
+  const materialMeshes=[];
+  if(selected.isMesh)materialMeshes.push(selected);else selected.traverse?.(node=>{if(node.isMesh)materialMeshes.push(node);});
+  const selectedMaterialMesh=materialMeshes.find(node=>node.uuid===materialTargetUuid)||materialMeshes[0]||null;
+  materialTargetUuid=selectedMaterialMesh?.uuid||null;
+  const firstMaterial=Array.isArray(selectedMaterialMesh?.material)?selectedMaterialMesh.material[0]:selectedMaterialMesh?.material;
+  const meshSelect=materialMeshes.length>1?`<label class="prop-label">Malla<select id="materialMeshTarget">${materialMeshes.map((node,i)=>`<option value="${node.uuid}" ${node===selectedMaterialMesh?'selected':''}>${safeName(node.name||`Malla ${i+1}`)}</option>`).join('')}</select></label>`:'';
+  const materialEditor=firstMaterial?`<div class="section-label">MATERIAL PBR</div>${meshSelect}<label class="prop-label">Color<input id="materialColor" type="color"></label><label class="prop-label">Rugosidad <span><input id="materialRoughness" type="range" min="0" max="1" step="0.01" value="${firstMaterial.roughness??0.6}"><output id="roughnessValue">${Number(firstMaterial.roughness??0.6).toFixed(2)}</output></span></label><label class="prop-label">Metallicidad <span><input id="materialMetalness" type="range" min="0" max="1" step="0.01" value="${firstMaterial.metalness??0}"><output id="metalnessValue">${Number(firstMaterial.metalness??0).toFixed(2)}</output></span></label>${firstMaterial.emissive?`<label class="prop-label">Emisión<input id="materialEmissive" type="color"></label><label class="prop-label">Intensidad emisión<input id="materialEmissionPower" type="number" min="0" max="10" step="0.1" value="${firstMaterial.emissiveIntensity||0}"></label>`:''}`:`<div class="section-label">MATERIAL</div><small>Selecciona una malla para editar el material.</small>`;
+  props.innerHTML = `${cameraAction}<label class="prop-label">Nombre<input id="objectName" type="text" maxlength="50"></label>${materialEditor}
+    <div class="section-label">POSICIÓN</div>${field('X', 0, p.x, 'position')}${field('Y', 1, p.y, 'position')}${field('Z', 2, p.z, 'position')}
     <div class="section-label">ROTACIÓN</div>${field('X', 0, THREE.MathUtils.radToDeg(r.x), 'rotation')}${field('Y', 1, THREE.MathUtils.radToDeg(r.y), 'rotation')}${field('Z', 2, THREE.MathUtils.radToDeg(r.z), 'rotation')}
     <div class="section-label">ESCALA</div>${field('X', 0, s.x, 'scale')}${field('Y', 1, s.y, 'scale')}${field('Z', 2, s.z, 'scale')}`;
-  const nameInput = $('#objectName');
-  nameInput.value = selected.name;
-  nameInput.addEventListener('change', () => { selected.name = safeName(nameInput.value); refreshList(); saveCurrentProject(); });
-  const colorInput = $('#objectColor');
-  colorInput.value = `#${selected.material?.color?.getHexString?.() || 'ffffff'}`;
-  colorInput.addEventListener('input', () => { selected.material?.color?.set(colorInput.value); scheduleProjectSave(); });
-  if (selected.material?.emissive) {
-    $('#emissionColor').value = `#${selected.material.emissive.getHexString()}`;
-    $('#emissionColor').addEventListener('input', (event) => selected.material?.emissive?.set(event.target.value));
-    $('#emissionIntensity').addEventListener('input', (event) => { if (selected.material) selected.material.emissiveIntensity = Math.max(0, Number(event.target.value) || 0); });
+  const nameInput=$('#objectName');nameInput.value=selected.name;
+  const getTargetMaterials=()=>{const node=materialMeshes.find(item=>item.uuid===materialTargetUuid)||selectedMaterialMesh;return (Array.isArray(node?.material)?node.material:[node?.material]).filter(Boolean);};
+  $('#materialMeshTarget')?.addEventListener('change',event=>{materialTargetUuid=event.target.value;renderProperties();});
+  if(firstMaterial){
+    $('#materialColor').value=`#${firstMaterial.color?.getHexString?.()||'ffffff'}`;
+    $('#materialColor').addEventListener('input',event=>{getTargetMaterials().forEach(mat=>mat.color?.set(event.target.value));scheduleProjectSave();});
+    $('#materialRoughness').addEventListener('input',event=>{const v=Number(event.target.value);$('#roughnessValue').value=v.toFixed(2);getTargetMaterials().forEach(mat=>{if('roughness'in mat)mat.roughness=v;});scheduleProjectSave();});
+    $('#materialMetalness').addEventListener('input',event=>{const v=Number(event.target.value);$('#metalnessValue').value=v.toFixed(2);getTargetMaterials().forEach(mat=>{if('metalness'in mat)mat.metalness=v;});scheduleProjectSave();});
+    if(firstMaterial.emissive){$('#materialEmissive').value=`#${firstMaterial.emissive.getHexString()}`;$('#materialEmissive').addEventListener('input',event=>{getTargetMaterials().forEach(mat=>mat.emissive?.set(event.target.value));scheduleProjectSave();});$('#materialEmissionPower').addEventListener('input',event=>{getTargetMaterials().forEach(mat=>{if(mat.emissive)mat.emissiveIntensity=Math.max(0,Number(event.target.value)||0);});scheduleProjectSave();});}
   }
+  nameInput.addEventListener('change',()=>{selected.name=safeName(nameInput.value);refreshList();saveCurrentProject();});
   $('#selectedCameraView')?.addEventListener('click', () => enterCameraView(selected));
   props.querySelectorAll('[data-axis]').forEach((input) => input.addEventListener('change', () => {
     const axis = Number(input.dataset.axis);
@@ -338,6 +344,7 @@ function snapshot() {
     name: object.name, kind: object.userData.kind || 'Cubo', assetKey: object.userData.kind === 'Modelo' ? (object.userData.assetKey || null) : undefined, position: object.position.toArray(),
     rotation: object.rotation.toArray(), scale: object.scale.toArray(),
     color: `#${object.material?.color?.getHexString?.() || object.color?.getHexString?.() || 'ffffff'}`,
+    materials: (()=>{const rows=[];object.traverse?.(node=>{if(node.isMesh){const mats=Array.isArray(node.material)?node.material:[node.material];rows.push({nodeName:node.name,materials:mats.map(mat=>({color:mat.color?`#${mat.color.getHexString()}`:null,roughness:mat.roughness,metalness:mat.metalness,emissive:mat.emissive?`#${mat.emissive.getHexString()}`:null,emissiveIntensity:mat.emissiveIntensity}))});}});if(object.isMesh){const mats=Array.isArray(object.material)?object.material:[object.material];rows.push({nodeName:object.name,materials:mats.map(mat=>({color:mat.color?`#${mat.color.getHexString()}`:null,roughness:mat.roughness,metalness:mat.metalness,emissive:mat.emissive?`#${mat.emissive.getHexString()}`:null,emissiveIntensity:mat.emissiveIntensity}))});}return rows;})(),
     intensity: object.intensity, distance: object.distance, angle: object.angle, penumbra: object.penumbra,
     fov: object.fov, near: object.near, far: object.far
   })) };
@@ -447,22 +454,34 @@ function renderSize() {
   if (mode === '720') return [1280, 720];
   return [Math.max(2, container.clientWidth & ~1), Math.max(2, container.clientHeight & ~1)];
 }
+function hideEditorGuidesForRender() {
+  const restore=[];
+  const hide=node=>{if(!node)return;restore.push([node,node.visible]);node.visible=false;};
+  hide(grid); hide(window.editorGizmo?.getHelper());
+  for(const object of objects) hide(object.userData.helper);
+  for(const marker of boneDots.values()) hide(marker);
+  return ()=>{for(const [node,visible] of restore)node.visible=visible;};
+}
 function captureRenderFrame(width, height) {
   const oldSize = new THREE.Vector2(); renderer.getSize(oldSize);
   const oldRatio = renderer.getPixelRatio();
   const renderCamera = cameraMode ? activeCamera : camera;
   const oldAspect = renderCamera.aspect;
-  renderer.setPixelRatio(1); renderer.setSize(width, height, false);
-  composer.setPixelRatio(1); composer.setSize(width, height);
-  renderCamera.aspect = width / height; renderCamera.updateProjectionMatrix();
-  sceneRenderPass.camera = renderCamera;
-  if (postEnabled) composer.render(); else renderer.render(scene, renderCamera);
-  const blobUrl = renderer.domElement.toDataURL('image/png');
-  renderer.setPixelRatio(oldRatio); renderer.setSize(oldSize.x, oldSize.y, false);
-  composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 0.9)); composer.setSize(oldSize.x, oldSize.y);
-  renderCamera.aspect = oldAspect; renderCamera.updateProjectionMatrix();
-  sceneRenderPass.camera = cameraMode ? activeCamera : camera;
-  return blobUrl;
+  const restoreGuides=hideEditorGuidesForRender();
+  try {
+    renderer.setPixelRatio(1); renderer.setSize(width, height, false);
+    composer.setPixelRatio(1); composer.setSize(width, height);
+    renderCamera.aspect = width / height; renderCamera.updateProjectionMatrix();
+    sceneRenderPass.camera = renderCamera;
+    if (postEnabled) composer.render(); else renderer.render(scene, renderCamera);
+    return renderer.domElement.toDataURL('image/png');
+  } finally {
+    restoreGuides();
+    renderer.setPixelRatio(oldRatio); renderer.setSize(oldSize.x, oldSize.y, false);
+    composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 0.9)); composer.setSize(oldSize.x, oldSize.y);
+    renderCamera.aspect = oldAspect; renderCamera.updateProjectionMatrix();
+    sceneRenderPass.camera = cameraMode ? activeCamera : camera;
+  }
 }
 async function exportPng() {
   const [width, height] = renderSize();
@@ -494,6 +513,7 @@ async function exportMp4() {
   const videoSource = new CanvasSource(renderCanvas, { codec: 'avc', quality: new Quality({ bitrate: 6000000 }) });
   output.addVideoTrack(videoSource, { frameRate: 24 });
   const oldSize = new THREE.Vector2(); renderer.getSize(oldSize); const oldRatio = renderer.getPixelRatio(); const renderCamera = cameraMode ? activeCamera : camera; const oldAspect = renderCamera.aspect;
+  const restoreGuides=hideEditorGuidesForRender();
   renderer.setPixelRatio(1); renderer.setSize(width, height, false); composer.setPixelRatio(1); composer.setSize(width, height); renderCamera.aspect = width / height; renderCamera.updateProjectionMatrix();
   sceneRenderPass.camera = renderCamera;
   $('#renderStatus').textContent = `Renderizando MP4 · ${duration} s…`;
@@ -513,18 +533,19 @@ async function exportMp4() {
     else download(name, blob, 'video/mp4');
     $('#renderStatus').textContent = 'MP4 H.264 exportado.'; toast('Render MP4 listo');
   } catch (error) { console.error(error); toast(`No se pudo renderizar MP4: ${error.message || error}`); $('#renderStatus').textContent = `Falló la exportación MP4: ${error.message || error}`; }
-  finally { renderer.setPixelRatio(oldRatio); renderer.setSize(oldSize.x, oldSize.y, false); composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 0.9)); composer.setSize(oldSize.x, oldSize.y); renderCamera.aspect = oldAspect; renderCamera.updateProjectionMatrix(); sceneRenderPass.camera = cameraMode ? activeCamera : camera; if (keyframes.size) interpolatePose(currentFrame); }
+  finally { restoreGuides(); renderer.setPixelRatio(oldRatio); renderer.setSize(oldSize.x, oldSize.y, false); composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 0.9)); composer.setSize(oldSize.x, oldSize.y); renderCamera.aspect = oldAspect; renderCamera.updateProjectionMatrix(); sceneRenderPass.camera = cameraMode ? activeCamera : camera; if (keyframes.size) interpolatePose(currentFrame); }
 }
 async function exportMp4Native(duration) {
   const [width,height]=renderSize(), fps=24, total=duration*fps, renderCamera=cameraMode?activeCamera:camera;
   const oldSize=new THREE.Vector2();renderer.getSize(oldSize);const oldRatio=renderer.getPixelRatio(),oldAspect=renderCamera.aspect;
+  const restoreGuides=hideEditorGuidesForRender();
   try {
     renderer.setPixelRatio(1);renderer.setSize(width,height,false);composer.setPixelRatio(1);composer.setSize(width,height);renderCamera.aspect=width/height;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=renderCamera;
     await NativeRenderExport.startVideo({width,height,fps});$('#renderStatus').textContent=`Renderizando MP4 · ${duration} s…`;
     for(let i=0;i<total;i++){if(keyframes.size)interpolatePose(Math.round(i/Math.max(1,total-1)*120));else if(importedMixer&&importedAnimationAction)importedMixer.setTime(i/fps);if(postEnabled)composer.render();else renderer.render(scene,renderCamera);const jpeg=renderer.domElement.toDataURL('image/jpeg',0.82).split(',')[1];await NativeRenderExport.addVideoFrame({jpeg});if(i%3===0){$('#renderStatus').textContent=`Renderizando MP4 · ${Math.floor((i+1)/total*100)}%`;await new Promise(resolve=>requestAnimationFrame(resolve));}}
     await NativeRenderExport.finishVideo();$('#renderStatus').textContent='MP4 guardado en la carpeta elegida.';toast('Exportación MP4 lista');
   } catch(error){console.error(error);$('#renderStatus').textContent=`Falló la exportación MP4: ${error.message||error}`;toast(`No se pudo exportar MP4: ${error.message||error}`);}
-  finally{renderer.setPixelRatio(oldRatio);renderer.setSize(oldSize.x,oldSize.y,false);composer.setPixelRatio(Math.min(window.devicePixelRatio||1,0.9));composer.setSize(oldSize.x,oldSize.y);renderCamera.aspect=oldAspect;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=cameraMode?activeCamera:camera;if(keyframes.size)interpolatePose(currentFrame);}
+  finally{restoreGuides();renderer.setPixelRatio(oldRatio);renderer.setSize(oldSize.x,oldSize.y,false);composer.setPixelRatio(Math.min(window.devicePixelRatio||1,0.9));composer.setSize(oldSize.x,oldSize.y);renderCamera.aspect=oldAspect;renderCamera.updateProjectionMatrix();sceneRenderPass.camera=cameraMode?activeCamera:camera;if(keyframes.size)interpolatePose(currentFrame);}
 }
 let renderFolderHandle = null;
 async function chooseRenderFolder() {
@@ -541,6 +562,10 @@ async function chooseRenderFolder() {
 async function saveScene() {
   const data=snapshot(); data.modelAssets=[];
   try { for (const object of objects.filter(item=>item.userData.kind==='Modelo'&&item.userData.assetKey)) { const blob=await getModelAsset(object.userData.assetKey); if(!blob) continue; const bytes=new Uint8Array(await blob.arrayBuffer()); let binary=''; for(let i=0;i<bytes.length;i+=0x8000) binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000)); data.modelAssets.push({key:object.userData.assetKey,data:btoa(binary)}); } download('mi-escena-3d.json',JSON.stringify(data,null,2),'application/json'); toast('Escena y modelos guardados'); } catch(error) { console.error(error); toast(`No se pudo guardar escena: ${error.message||error}`); }
+}
+function restoreMaterialSnapshots(root, rows) {
+  if(!Array.isArray(rows))return;const meshes=[];if(root.isMesh)meshes.push(root);root.traverse?.(node=>{if(node.isMesh)meshes.push(node);});
+  for(let i=0;i<Math.min(meshes.length,rows.length);i++){const mats=Array.isArray(meshes[i].material)?meshes[i].material:[meshes[i].material];const saved=rows[i].materials||[];for(let j=0;j<Math.min(mats.length,saved.length);j++){const mat=mats[j],state=saved[j];if(state.color)mat.color?.set(state.color);if(Number.isFinite(state.roughness)&&'roughness'in mat)mat.roughness=state.roughness;if(Number.isFinite(state.metalness)&&'metalness'in mat)mat.metalness=state.metalness;if(state.emissive)mat.emissive?.set(state.emissive);if(Number.isFinite(state.emissiveIntensity)&&'emissiveIntensity'in mat)mat.emissiveIntensity=state.emissiveIntensity;mat.needsUpdate=true;}}
 }
 async function loadScene(data) {
   if (Array.isArray(data?.modelAssets)) for (const asset of data.modelAssets) if (asset?.key&&asset?.data) { const binary=atob(asset.data); const bytes=new Uint8Array(binary.length); for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i); await storeModelAsset(asset.key,new Blob([bytes],{type:'model/gltf-binary'})); }
@@ -563,10 +588,11 @@ async function loadScene(data) {
     object.position.fromArray(Array.isArray(item.position) ? item.position : [0, 0.65, 0]);
     object.rotation.fromArray(Array.isArray(item.rotation) ? item.rotation : [0, 0, 0]);
     object.scale.fromArray(Array.isArray(item.scale) ? item.scale : [1, 1, 1]);
+    restoreMaterialSnapshots(object,item.materials);
     if (object.isLight) { object.intensity = item.intensity ?? object.intensity; if ('distance' in object) object.distance = item.distance ?? object.distance; if ('angle' in object) object.angle = item.angle ?? object.angle; if ('penumbra' in object) object.penumbra = item.penumbra ?? object.penumbra; }
     if (object.isCamera) { object.fov = item.fov || object.fov; object.near = item.near || object.near; object.far = item.far || object.far; object.updateProjectionMatrix(); object.userData.helper?.update(); viewCameraObject = object; }
   }
-  for(const item of modelItems){if(!item.assetKey)continue;try{const blob=await getModelAsset(item.assetKey);if(!blob)continue;const buffer=await blob.arrayBuffer();await new Promise((resolve,reject)=>new GLTFLoader().parse(buffer,'',(gltf)=>{const model=gltf.scene;model.name=safeName(item.name||'Modelo');model.userData.kind='Modelo';model.userData.assetKey=item.assetKey;model.position.fromArray(item.position||[0,0,0]);model.rotation.fromArray(item.rotation||[0,0,0]);model.scale.fromArray(item.scale||[1,1,1]);model.traverse(child=>{if(child.isMesh){child.castShadow=true;child.receiveShadow=true;}});scene.add(model);objects.push(model);currentModel=model;importedClips=gltf.animations||[];importedMixer=importedClips.length?new THREE.AnimationMixer(model):null;makeBoneMarkers(model);resolve();},reject));}catch(error){console.warn('Could not restore imported model',error);}}
+  for(const item of modelItems){if(!item.assetKey)continue;try{const blob=await getModelAsset(item.assetKey);if(!blob)continue;const buffer=await blob.arrayBuffer();await new Promise((resolve,reject)=>new GLTFLoader().parse(buffer,'',(gltf)=>{const model=gltf.scene;model.name=safeName(item.name||'Modelo');model.userData.kind='Modelo';model.userData.assetKey=item.assetKey;model.position.fromArray(item.position||[0,0,0]);model.rotation.fromArray(item.rotation||[0,0,0]);model.scale.fromArray(item.scale||[1,1,1]);restoreMaterialSnapshots(model,item.materials);model.traverse(child=>{if(child.isMesh){child.castShadow=true;child.receiveShadow=true;}});scene.add(model);objects.push(model);currentModel=model;importedClips=gltf.animations||[];importedMixer=importedClips.length?new THREE.AnimationMixer(model):null;makeBoneMarkers(model);resolve();},reject));}catch(error){console.warn('Could not restore imported model',error);}}
   loadingProjectScene=false;
   if (viewCameraObject) $('#enterCamera').hidden = false;
   refreshList(); renderProperties(); updateStatus(); saveCurrentProject(); toast('Escena y modelos cargados');
@@ -889,7 +915,7 @@ function togglePlayback() {
   $('#playAnimation').textContent = isPlaying ? '❚❚' : '▶';
   clearInterval(playTimer);
   if (isPlaying) playTimer = setInterval(() => {
-    currentFrame = currentFrame >= 120 ? 0 : currentFrame + 1;
+    if(currentFrame>=120){if(!animationLoop){isPlaying=false;$('#playAnimation').textContent='▶';clearInterval(playTimer);return;}currentFrame=0;}else currentFrame++;
     interpolatePose(currentFrame);
     updateFrameControls();
   }, 40);
@@ -1004,6 +1030,7 @@ $('#addKeyframe').addEventListener('click', () => {
   captureKeyframe();
 });
 $('#playAnimation').addEventListener('click', togglePlayback);
+$('#animationLoop').addEventListener('change',event=>{animationLoop=event.target.checked;toast(animationLoop?'Ciclo de animación activado':'Ciclo de animación detenido');});
 $('#frameRange').addEventListener('input', (event) => setFrame(event.target.value));
 $('#frameNumber').addEventListener('change', (event) => setFrame(event.target.value));
 $('#prevFrame').addEventListener('click', () => setFrame(currentFrame - 1));
@@ -1017,12 +1044,18 @@ $('#addBoneTrack').addEventListener('click', () => {
   refreshBoneList();
   toast(`Pista de hueso: ${boneTarget.name || 'Hueso'}`);
 });
+function applyPostLook(name) {
+  const look = name === 'warm' ? {contrast:1.22,saturation:1.08,warmth:0.075,vignette:0.27,grain:0.01,bloom:0.36} : (name === 'neutral' ? {contrast:1.04,saturation:1,warmth:0.005,vignette:0.08,grain:0,bloom:0.12} : {contrast:1.16,saturation:0.92,warmth:0.035,vignette:0.22,grain:0.012,bloom:0.28});
+  const u=lightPostPass.uniforms;u.contrast.value=look.contrast;u.saturation.value=look.saturation;u.warmth.value=look.warmth;u.vignette.value=look.vignette;u.grain.value=look.grain;bloomPass.strength=look.bloom;
+}
+$('#postLook').addEventListener('change',event=>{applyPostLook(event.target.value);postEnabled=true;$('#postToggle').classList.add('active');bloomPass.enabled=true;lightPostPass.enabled=true;toast('Acabado actualizado');});
 $('#postToggle').addEventListener('click', (event) => {
   postEnabled = !postEnabled;
   event.currentTarget.classList.toggle('active', postEnabled);
   bloomPass.enabled = postEnabled;
   lightPostPass.enabled = postEnabled;
-  toast(postEnabled ? 'Postprocesado liviano activado' : 'Postprocesado desactivado');
+  if(postEnabled) applyPostLook($('#postLook').value||'cinematic');
+  toast(postEnabled ? 'Postprocesado cinematográfico activado' : 'Postprocesado desactivado');
 });
 document.querySelectorAll('[data-tool]').forEach((button) => button.addEventListener('click', () => {
   setTool(button.dataset.tool);
