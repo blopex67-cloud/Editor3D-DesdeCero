@@ -12,7 +12,8 @@
     "@capacitor/android": "^7.4.3",
     "@capacitor/core": "^7.4.3",
     "three": "^0.179.1",
-    "mediabunny": "^1.66.0"
+    "mediabunny": "^1.66.0",
+    "jszip": "^3.10.1"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.4.3",
