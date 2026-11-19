@@ -140,3 +140,5 @@ html,body,#app,.viewport,.right-panel,.topbar,.toolbar,footer{background-color:#
 #scene canvas{image-rendering:auto}
 /* More room for touchable timeline controls in animation mode. */
 .timeline-title{height:19px}.animation-timeline{padding-left:8px;padding-right:8px}.timeline-controls{overflow-x:auto;scrollbar-width:none}.timeline-controls::-webkit-scrollbar{display:none}.timeline-ruler{touch-action:pan-x pan-y;overscroll-behavior:contain}
+
+.material-context-note{display:block;padding:8px 10px;border-left:2px solid #c9192e;background:rgba(201,25,46,.08);color:#e8dfe1;font-size:11px;line-height:1.45}.material-context-note[hidden]{display:none}#applyShaderAll{width:100%;margin:6px 0 10px;border:1px solid #9b2a36;border-radius:8px;background:#2d1115;color:#fff;padding:9px 10px;font-weight:650}#applyShaderAll:disabled{opacity:.42}
