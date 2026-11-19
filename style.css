@@ -157,3 +157,5 @@ html,body,#app,.viewport,.right-panel,.topbar,.toolbar,footer{background-color:#
 
 /* Comportamiento táctil de aplicación, sin selección accidental ni menú web. */
 html,body,#app,#app *{-webkit-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important;-webkit-tap-highlight-color:transparent}#app input,#app textarea{-webkit-user-select:none!important;user-select:none!important}.left-overlay{display:none!important}
+
+
