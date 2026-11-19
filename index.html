@@ -30,6 +30,14 @@
         <button id="assetsToggle" title="Abrir biblioteca de assets">Assets</button>
       </div>
     </header>
+    <nav class="context-bar" id="contextBar" aria-label="Controles del elemento seleccionado">
+      <span class="context-kind" id="contextKind">ESCENA</span>
+      <span class="context-name" id="contextName">Sin selección</span>
+      <div class="context-actions" id="contextActions" hidden>
+        <button type="button" data-context-tab="material">Material</button>
+        <button type="button" data-context-tab="properties">Transformar</button>
+      </div>
+    </nav>
     <main class="workspace" id="workspace">
       <nav class="toolbar" aria-label="Herramientas">
         <button class="tool active" data-tool="select" title="Seleccionar"><img src="icons/move-3d.svg" alt=""><small>Selección</small></button>
