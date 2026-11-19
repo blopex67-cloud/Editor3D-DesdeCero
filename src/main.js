@@ -1318,7 +1318,7 @@ function togglePlayback() {
   isPlaying=!isPlaying;lastPlaybackUiUpdate=0;$('#playAnimation').textContent=isPlaying?'❚❚ Pausar':'▶ Reproducir';
 }
 function advanceTimelinePlayback(delta){
-  if(!isPlaying||!keyframes.size||renderCaptureActive)return;const duration=Math.max(1,Number($('#renderDuration').value)||5),step=120/duration*delta;let next=currentFrame+step;if(next>=120){if(!animationLoop){currentFrame=120;isPlaying=false;$('#playAnimation').textContent='▶ Reproducir';}else next%=120;}if(isPlaying||currentFrame<120){currentFrame=next;interpolatePose(currentFrame);}if(performance.now()-lastPlaybackUiUpdate>50){updateFrameControls();lastPlaybackUiUpdate=performance.now();}
+  if(!isPlaying||!keyframes.size||renderCaptureActive)return;const duration=Math.max(1,Number($('#renderDuration').value)||5),step=120/duration*delta;let next=currentFrame+step;if(next>=120){if(!animationLoop){currentFrame=120;isPlaying=false;$('#playAnimation').textContent='▶ Reproducir';}else next%=120;}if(isPlaying||currentFrame<120){currentFrame=next;interpolatePose(currentFrame);}else interpolatePose(120);if(performance.now()-lastPlaybackUiUpdate>50){updateFrameControls();lastPlaybackUiUpdate=performance.now();}
 }
 function viewportRenderDpr(){return Math.min(window.devicePixelRatio||1,3)*dynamicRenderScale;}
 function applyDynamicRenderScale(scale=dynamicRenderScale,width=null,height=null){
@@ -1512,7 +1512,7 @@ resize();
 renderProjectCards();
 function beginInteractiveMotion(){interactiveMotion=true;clearTimeout(adaptiveQualityTimer);}
 function endInteractiveMotion(){commitHistoryTransaction();interactiveMotion=false;clearTimeout(adaptiveQualityTimer);adaptiveQualityTimer=setTimeout(()=>{if(interactiveMotion||document.visibilityState==='hidden'||isPlaying||importedAnimationAction)return;frameBudgetWindowStart=performance.now();frameBudgetLastTime=0;frameBudgetSamples=0;frameBudgetSlowFrames=0;},700);}
-renderer.domElement.addEventListener('webglcontextlost',event=>{event.preventDefault();glContextAvailable=false;idleQualityBoost=false;interactiveMotion=true;clearTimeout(adaptiveQualityTimer);toast('La escena es pesada para el dispositivo; reduje la calidad para evitar el cierre.');});
+renderer.domElement.addEventListener('webglcontextlost',event=>{event.preventDefault();renderLoopRunning=false;if(renderLoopRafId){cancelAnimationFrame(renderLoopRafId);renderLoopRafId=0;}glContextAvailable=false;idleQualityBoost=false;interactiveMotion=true;clearTimeout(adaptiveQualityTimer);toast('La escena es pesada para el dispositivo; reduje la calidad para evitar el cierre.');});
 renderer.domElement.addEventListener('webglcontextrestored',()=>{glContextAvailable=true;interactiveMotion=false;endInteractiveMotion();startRenderLoop();});
 let lastRenderTimestamp=0,renderLoopRunning=false,lastOutlineUpdate=0,renderLoopRafId=0;
 function startRenderLoop(){if(renderLoopRunning||document.visibilityState==='hidden'||$('#app').hidden)return;renderLoopRunning=true;lastRenderTimestamp=0;renderLoopRafId=requestAnimationFrame(frame);}
