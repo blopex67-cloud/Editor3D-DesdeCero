@@ -731,6 +731,7 @@ async function loadNativeRenderFolder() {
   if (!Capacitor.isNativePlatform()) return;
   try { const result = await NativeRenderExport.getFolder(); if (result.displayName) { localStorage.setItem('editor3d:render-folder-name', result.displayName); $('#renderPath').value = result.displayName; } } catch {}
 }
+function estimateSceneComplexity(){let vertexCount=0,triangleCount=0,drawCalls=0,skinnedMeshes=0,transparentMeshes=0;const seenGeometries=new Set();scene.traverse(node=>{if(!node.isMesh||!node.visible)return;drawCalls++;if(node.isSkinnedMesh)skinnedMeshes++;const materials=Array.isArray(node.material)?node.material:[node.material];if(materials.some(material=>material?.transparent||Number(material?.transmission)>0))transparentMeshes++;const geometry=node.geometry;if(!geometry)return;if(!seenGeometries.has(geometry)){seenGeometries.add(geometry);const positions=geometry.getAttribute('position');vertexCount+=positions?.count||0;triangleCount+=geometry.index?Math.floor(geometry.index.count/3):Math.floor((positions?.count||0)/3);}});return vertexCount+triangleCount+drawCalls*1200+skinnedMeshes*8000+transparentMeshes*1600;}
 function safeExportSize(requestedWidth,requestedHeight,kind='image'){const complexity=estimateSceneComplexity(),memory=Number(navigator.deviceMemory)||4;let maxPixels=kind==='video'?1280*720:1920*1080;if(memory<=2)maxPixels=Math.min(maxPixels,1280*720);if(complexity>1800000)maxPixels=Math.min(maxPixels,1280*720);else if(complexity>900000)maxPixels=Math.min(maxPixels,1600*900);const maxSide=Math.max(256,renderer.capabilities.maxTextureSize||2048),sideScale=Math.min(1,maxSide/Math.max(requestedWidth,requestedHeight)),scale=Math.min(sideScale,Math.sqrt(maxPixels/Math.max(1,requestedWidth*requestedHeight)));return[Math.max(2,Math.floor(requestedWidth*scale/2)*2),Math.max(2,Math.floor(requestedHeight*scale/2)*2)];}
 function renderSize() {
   const mode = $('#renderResolution')?.value||'auto';
@@ -787,7 +788,7 @@ async function exportPng() {
     }
     download(`render-${Date.now()}.png`, blob, 'image/png');
     $('#renderStatus').textContent = 'PNG exportado a Descargas. Si tu Android no permite elegir carpeta en esta WebView, usa el selector de archivos del sistema.';
-  } catch (error) { toast(`No se pudo exportar PNG: ${error.message || error}`); } finally {renderCaptureActive=false;}
+  } catch (error) { console.error('PNG export failed',error);$('#renderStatus').textContent=`No se pudo exportar PNG: ${error?.message||error}`;toast(`No se pudo exportar PNG: ${error?.message||error}`); } finally {renderCaptureActive=false;}
 }
 async function exportMp4() {
   if(renderCaptureActive){toast('Ya hay una exportación en curso');return;}
