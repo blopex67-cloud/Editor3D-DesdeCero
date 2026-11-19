@@ -157,3 +157,21 @@ html,body,#app,.viewport,.right-panel,.topbar,.toolbar,footer{background-color:#
 
 /* Comportamiento táctil de aplicación, sin selección accidental ni menú web. */
 html,body,#app,#app *{-webkit-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important;-webkit-tap-highlight-color:transparent}#app input,#app textarea{-webkit-user-select:none!important;user-select:none!important}.left-overlay{display:none!important}
+
+/* HUD icon alignment: consistent boxes, centered strokes, predictable tap targets. */
+.topbar{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)!important;padding:0 6px!important}
+.brand-zone,.top-actions{display:flex!important;align-items:center!important;justify-content:center!important;gap:4px!important;min-width:0!important}
+.brand-zone button,.top-actions button{display:inline-flex!important;align-items:center!important;justify-content:center!important;vertical-align:middle!important;line-height:1!important;flex:0 0 auto!important}
+.brand-zone #home{width:28px!important;min-width:28px!important;height:23px!important;padding:0!important;font-size:17px!important}
+.brand-zone #save{height:23px!important;min-width:58px!important;padding:0 6px!important;font-size:8px!important;white-space:nowrap!important}
+.brand-zone #importScene,.brand-zone #exportScene,.top-actions #undo,.top-actions #redo{width:25px!important;min-width:25px!important;height:23px!important;padding:0!important}
+.topbar .brand-zone img,.topbar .top-actions img{display:block!important;width:15px!important;height:15px!important;max-width:15px!important;max-height:15px!important;object-fit:contain!important;object-position:center!important;margin:auto!important;filter:brightness(0) invert(.92)!important;opacity:.95!important}
+.topbar .top-actions button:disabled img{opacity:.38!important}
+.mode-actions{display:flex!important;align-items:center!important;justify-content:center!important;gap:5px!important;white-space:nowrap!important}
+.toolbar{display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:flex-start!important;gap:3px!important;padding:5px 2px!important}
+.toolbar .tool{box-sizing:border-box!important;width:32px!important;min-width:32px!important;height:35px!important;min-height:35px!important;padding:3px 1px!important;display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;gap:2px!important;line-height:1!important}
+.toolbar .tool img{display:block!important;width:18px!important;height:18px!important;max-width:18px!important;max-height:18px!important;min-width:18px!important;min-height:18px!important;object-fit:contain!important;object-position:center!important;flex:0 0 18px!important;margin:0 auto!important}
+.toolbar .tool small{display:block!important;max-width:100%!important;margin:0!important;padding:0!important;text-align:center!important;font-size:6px!important;line-height:8px!important;white-space:nowrap!important}
+.toolbar #visibilityToggle,.toolbar #duplicate{margin-top:0!important}
+.toolbar #delete{margin-top:auto!important}
+@media(max-width:600px){.topbar{padding:0 4px!important}.brand-zone,.top-actions{gap:2px!important}.toolbar .tool{width:30px!important;min-width:30px!important}.toolbar .tool img{width:17px!important;height:17px!important;min-width:17px!important;min-height:17px!important;flex-basis:17px!important}.mode-actions{gap:3px!important}}
