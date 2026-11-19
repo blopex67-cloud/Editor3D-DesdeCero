@@ -175,3 +175,28 @@ html,body,#app,#app *{-webkit-user-select:none!important;user-select:none!import
 .toolbar #visibilityToggle,.toolbar #duplicate{margin-top:0!important}
 .toolbar #delete{margin-top:auto!important}
 @media(max-width:600px){.topbar{padding:0 4px!important}.brand-zone,.top-actions{gap:2px!important}.toolbar .tool{width:30px!important;min-width:30px!important}.toolbar .tool img{width:17px!important;height:17px!important;min-width:17px!important;min-height:17px!important;flex-basis:17px!important}.mode-actions{gap:3px!important}}
+
+/* Ajuste visual puntual: fila inferior y último botón de la barra lateral. */
+.view-tools{right:7px!important;bottom:6px!important;left:auto!important;display:flex!important;flex-direction:row!important;align-items:center!important;justify-content:flex-end!important;gap:4px!important;max-width:calc(100% - 82px)!important;overflow:visible!important}
+.view-tools>button{box-sizing:border-box!important;flex:0 0 auto!important;display:inline-flex!important;flex-direction:row!important;align-items:center!important;justify-content:center!important;gap:4px!important;height:27px!important;min-height:27px!important;width:32px!important;min-width:32px!important;padding:0 5px!important;line-height:1!important;white-space:nowrap!important;font-size:8px!important;text-align:center!important}
+.view-tools>button>img{display:block!important;flex:0 0 16px!important;width:16px!important;height:16px!important;max-width:16px!important;max-height:16px!important;min-width:16px!important;min-height:16px!important;object-fit:contain!important;object-position:center!important;margin:0!important;filter:brightness(0) invert(1)!important;opacity:1!important}
+.view-tools #frame,.view-tools #gridToggle{width:28px!important;min-width:28px!important;padding:0!important}
+.view-tools #postToggle,.view-tools #whiteStudioToggle{width:auto!important;min-width:38px!important;padding:0 6px!important}
+.view-tools #openSkyLibrary,.view-tools #settingsOpen{width:auto!important;min-width:57px!important;padding:0 6px!important;gap:4px!important}
+.view-tools #renderOpen{width:auto!important;min-width:72px!important;padding:0 7px!important;gap:5px!important;justify-content:center!important;font-size:8px!important;font-weight:650!important}
+.view-tools #renderOpen>img{width:17px!important;height:17px!important;flex-basis:17px!important;min-width:17px!important;min-height:17px!important}
+.view-tools button:not(:has(img)){color:#f5f5f5!important}
+/* Evita que icon filters alteren texto de controles, solo los SVG son blancos. */
+.toolbar .tool img,.topbar img{object-position:center!important}
+.toolbar{position:absolute!important;left:3px!important;top:5px!important;bottom:5px!important;width:36px!important;max-height:calc(100% - 10px)!important;height:auto!important;overflow-y:auto!important;overflow-x:hidden!important;align-items:center!important;justify-content:flex-start!important;gap:2px!important;padding:3px 2px!important}
+.toolbar .tool{flex:0 0 35px!important;margin:0!important}
+.toolbar #duplicate{margin-top:auto!important}
+.toolbar #delete{margin-top:0!important;flex:0 0 35px!important;margin-bottom:2px!important;position:static!important;align-self:center!important}
+@media(max-width:700px){.view-tools{right:4px!important;gap:2px!important;max-width:calc(100% - 62px)!important}.view-tools>button{height:25px!important;min-height:25px!important}.view-tools #openSkyLibrary,.view-tools #settingsOpen{min-width:48px!important;padding:0 4px!important}.view-tools #renderOpen{min-width:62px!important;padding:0 4px!important}.view-tools #frame,.view-tools #gridToggle{width:25px!important;min-width:25px!important}.toolbar{width:33px!important}}
+.toolbar{height:auto!important;bottom:4px!important;overflow:hidden!important;gap:1px!important;padding:2px 1px!important}
+.toolbar .tool{width:32px!important;min-width:32px!important;height:32px!important;min-height:32px!important;flex:0 0 32px!important;padding:1px!important}
+.toolbar .tool img{width:17px!important;height:17px!important;min-width:17px!important;min-height:17px!important;flex-basis:17px!important}
+.toolbar .tool small{font-size:5.5px!important;line-height:7px!important}
+.toolbar i{flex:0 0 1px!important;margin:0!important}
+.toolbar #duplicate{margin-top:auto!important}
+.toolbar #delete{margin:0 0 1px!important}
