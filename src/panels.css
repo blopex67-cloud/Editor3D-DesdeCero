@@ -50,3 +50,36 @@ html,body,#app,#app *{-webkit-user-select:none!important;user-select:none!import
 .slider-name{display:block!important;writing-mode:vertical-rl!important;text-orientation:mixed!important;transform:rotate(180deg)!important;white-space:nowrap!important;line-height:1!important;max-height:83px!important;color:#ddd!important;font-size:8px!important}
 .sky-control>span:not(.slider-name),.quality-panel label:has(input[type=range])>span:not(.slider-name),.render-panel label:has(input[type=range])>span:not(.slider-name),.prop-label.vertical-slider>span:not(.slider-name){display:flex!important;flex:1;flex-direction:column!important;align-items:center!important;justify-content:space-between!important}
 .texture-tiling-control>span:not(.slider-name){display:flex!important;flex-direction:column!important;align-items:center!important}
+
+/* Ajuste pedido 2026-11-19: controles sencillos, horizontales y sin indicadores extra. */
+:root{--ui-red:#ff1738;--ui-red-bright:#ff2545;--ui-slider:#ff253f}
+/* Todos los range del editor vuelven a filas horizontales uniformes. */
+.material-panel label:has(input[type=range]),
+.right-panel .properties label:has(input[type=range]),
+.sky-panel label:has(input[type=range]),
+.quality-panel label:has(input[type=range]),
+.render-panel label:has(input[type=range]),
+.material-panel .vertical-slider,
+.right-panel .inspector .vertical-slider{
+ display:grid!important;grid-template-columns:minmax(67px,auto) minmax(60px,1fr)!important;grid-auto-flow:row!important;align-items:center!important;justify-content:stretch!important;gap:6px!important;width:100%!important;min-width:0!important;height:auto!important;min-height:36px!important;margin:5px 0!important;padding:5px 6px!important;border:1px solid #303030!important;border-left:2px solid var(--ui-red)!important;border-radius:4px!important;background:#101010!important;color:#eee!important;font-size:8px!important;text-align:left!important;white-space:normal!important
+}
+.slider-name{display:block!important;grid-column:1!important;grid-row:1!important;writing-mode:horizontal-tb!important;text-orientation:mixed!important;transform:none!important;max-height:none!important;white-space:normal!important;line-height:1.2!important;color:#eee!important;font-size:8px!important}
+.material-panel label:has(input[type=range])>span:not(.slider-name),
+.right-panel .properties label:has(input[type=range])>span:not(.slider-name),
+.sky-panel label:has(input[type=range])>span:not(.slider-name),
+.quality-panel label:has(input[type=range])>span:not(.slider-name),
+.render-panel label:has(input[type=range])>span:not(.slider-name){display:contents!important}
+.material-panel input[type=range],.right-panel .properties input[type=range],.sky-panel input[type=range],.quality-panel input[type=range],.render-panel input[type=range],.vertical-slider input[type=range]{grid-column:2!important;grid-row:1!important;display:block!important;writing-mode:horizontal-tb!important;direction:ltr!important;appearance:none!important;-webkit-appearance:none!important;width:100%!important;min-width:55px!important;height:18px!important;min-height:18px!important;margin:0!important;padding:0!important;touch-action:pan-x!important;background:transparent!important;accent-color:var(--ui-red)!important}
+.material-panel input[type=range]::-webkit-slider-runnable-track,.right-panel .properties input[type=range]::-webkit-slider-runnable-track,.sky-panel input[type=range]::-webkit-slider-runnable-track,.quality-panel input[type=range]::-webkit-slider-runnable-track,.render-panel input[type=range]::-webkit-slider-runnable-track,.vertical-slider input[type=range]::-webkit-slider-runnable-track{height:6px!important;border:0!important;border-radius:999px!important;background:#383838!important;box-shadow:none!important}
+.material-panel input[type=range]::-moz-range-track,.right-panel .properties input[type=range]::-moz-range-track,.sky-panel input[type=range]::-moz-range-track,.quality-panel input[type=range]::-moz-range-track,.render-panel input[type=range]::-moz-range-track,.vertical-slider input[type=range]::-moz-range-track{height:6px!important;border:0!important;border-radius:999px!important;background:#383838!important}
+/* Sin bolitas, flechas, cifras ni marcas superpuestas: solo la barra horizontal. */
+.material-panel input[type=range]::-webkit-slider-thumb,.right-panel .properties input[type=range]::-webkit-slider-thumb,.sky-panel input[type=range]::-webkit-slider-thumb,.quality-panel input[type=range]::-webkit-slider-thumb,.render-panel input[type=range]::-webkit-slider-thumb,.vertical-slider input[type=range]::-webkit-slider-thumb{-webkit-appearance:none!important;appearance:none!important;width:0!important;height:0!important;margin:0!important;border:0!important;background:transparent!important;box-shadow:none!important;opacity:0!important}
+.material-panel input[type=range]::-moz-range-thumb,.right-panel .properties input[type=range]::-moz-range-thumb,.sky-panel input[type=range]::-moz-range-thumb,.quality-panel input[type=range]::-moz-range-thumb,.render-panel input[type=range]::-moz-range-thumb,.vertical-slider input[type=range]::-moz-range-thumb{width:0!important;height:0!important;border:0!important;background:transparent!important;box-shadow:none!important;opacity:0!important}
+.material-panel label:has(input[type=range]) output,.right-panel .properties label:has(input[type=range]) output,.sky-panel label:has(input[type=range]) output,.quality-panel label:has(input[type=range]) output,.render-panel label:has(input[type=range]) output,.vertical-slider output{display:none!important}
+/* Iconos claros y legibles; rojo vivo al seleccionar, no filtros que los dejan negros. */
+#app button img,#app .tool img,#app .view-tools img,#app .brand-zone img,#app .top-actions img{filter:brightness(0) invert(1)!important;opacity:.95!important}
+#app .tool.active img,#app .tool[data-tool="translate"].active img,#app .tool[data-tool="rotate"].active img,#app .tool[data-tool="scale"].active img{filter:brightness(0) saturate(100%) invert(22%) sepia(99%) saturate(7495%) hue-rotate(339deg) brightness(102%) contrast(105%)!important}
+.tool.active,.tool.active small,.view-tools #postToggle.active,.view-tools #whiteStudioToggle.active,.top-actions #materialPanelToggle,.top-actions #objectsPanelToggle,.toolbar #visibilityToggle.active{background:#a80d27!important;border-color:#ff2545!important;color:#fff!important}
+#save,.render-panel #startRender,.view-tools #renderOpen{background:#d60d2e!important;border-color:#ff2545!important;color:white!important}
+.toolbar .tool.active{box-shadow:inset 2px 0 #ff2545!important}
+.object-row.selected{background:#951024!important;border-left:2px solid #ff2545!important}
