@@ -26,7 +26,6 @@ import JSZip from 'jszip';
 import { decode as decodeMessagePack } from '@msgpack/msgpack';
 const NativeRenderExport = registerPlugin('RenderExport');
 import '../style.css';
-import './panels.css';
 
 const $ = (selector) => document.querySelector(selector);
 const container = $('#scene');
@@ -1419,10 +1418,10 @@ $('#confirmProject').addEventListener('click', confirmCreateProject);
 $('#cancelProject').addEventListener('click', () => { $('#projectDialog').hidden = true; });
 $('#projectNameInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') confirmCreateProject(); if (event.key === 'Escape') $('#projectDialog').hidden = true; });
 
-$('#returnProjects')?.addEventListener('click',returnToProjects);
 $('#enterCamera').addEventListener('click', () => enterCameraView(selected?.isCamera ? selected : viewCameraObject));
 $('#exitCamera').addEventListener('click', exitCameraView);
 $('#selectCameraView').addEventListener('click', () => { const cameras = objects.filter((item) => item.isCamera); if (!cameras.length) { toast('Añade una cámara desde Assets'); return; } const index = cameras.indexOf(viewCameraObject); viewCameraObject = cameras[(index + 1) % cameras.length]; toast(`Cámara activa: ${viewCameraObject.name}`); });
+$('#home')?.addEventListener('click',returnToProjects);
 $('#materialPanelToggle').addEventListener('click',()=>{const workspace=$('#workspace'),kind=selectionKind(selected);if(!selected)return;const target=kind.tab==='properties'?'show-properties':'show-material';if(workspace.classList.contains(target)){workspace.classList.remove(target);if(target==='show-material')$('#materialPanel').hidden=true;return;}openContextSlot(kind.tab);});
 $('#materialClose').addEventListener('click',()=>{$('#materialPanel').hidden=true;$('#workspace').classList.remove('show-material','show-properties','hide-objects');});
 $('#objectsPanelToggle').addEventListener('click',()=>{const workspace=$('#workspace');if(workspace.classList.contains('show-material')){$('#materialPanel').hidden=true;workspace.classList.remove('show-material','hide-objects');return;}workspace.classList.toggle('hide-objects');});
