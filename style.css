@@ -137,7 +137,7 @@ html,body,#app,.viewport,.right-panel,.topbar,.toolbar,footer{background-color:#
 .key-dot:active{width:14px;height:14px;min-width:14px}
 @media(max-height:340px){.animation-timeline{height:82px;padding:2px 5px}.timeline-ruler{height:34px}.timeline-controls button{min-height:22px}.anim-track{min-height:22px;height:22px}}
 /* Solid mode and selection remain legible on phone screens. */
-#scene canvas{image-rendering:auto}
+#scene canvas{image-rendering:auto;display:block;width:100%;height:100%;filter:none;transform:none}
 /* More room for touchable timeline controls in animation mode. */
 .timeline-title{height:19px}.animation-timeline{padding-left:8px;padding-right:8px}.timeline-controls{overflow-x:auto;scrollbar-width:none}.timeline-controls::-webkit-scrollbar{display:none}.timeline-ruler{touch-action:pan-x pan-y;overscroll-behavior:contain}
 
