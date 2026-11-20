@@ -65,14 +65,7 @@
         <section class="outliner">
           <div class="panel-tabs"><span>Hierarchy</span><span>Scene</span></div>
           <div class="animation-panel" id="animationPanel" hidden>
-            <div class="anim-head"><span>PISTAS DE ANIMACIÓN</span></div>
-            <div class="rig-anim-tools"><button id="importRigAnimation" type="button">＋ Importar animación FBX</button><button id="startAutoRig" type="button">Autorig por puntos</button><a href="https://www.mixamo.com/" target="_blank" rel="noopener">Abrir Mixamo</a></div>
-            <input id="rigAnimationFile" type="file" accept=".fbx,application/octet-stream" hidden>
-            <section id="autoRigPanel" class="auto-rig-panel" hidden><b>AUTORIG · PUNTOS DEL CUERPO</b><small>Elige un punto y tócalo sobre el modelo. Colócalo en vista frontal; el peso automático es aproximado.</small>
-              <div class="auto-rig-points"><button type="button" data-rig-point="hip">Cadera</button><button type="button" data-rig-point="shoulderL">Hombro izq.</button><button type="button" data-rig-point="handL">Muñeca izq.</button><button type="button" data-rig-point="shoulderR">Hombro der.</button><button type="button" data-rig-point="handR">Muñeca der.</button><button type="button" data-rig-point="footL">Pie izq.</button><button type="button" data-rig-point="footR">Pie der.</button><button type="button" data-rig-point="head">Cabeza</button></div>
-              <div id="autoRigStatus" class="auto-rig-status">Elige un punto y tócalo en el modelo.</div><div class="auto-rig-actions"><button id="cancelAutoRig" type="button">Cancelar</button><button id="finishAutoRig" type="button" disabled>Crear rig</button></div>
-            </section>
-            <div class="anim-track-picker"><select id="animationNodePicker" aria-label="Elegir objeto o nodo para animar"><option value="">Elegir objeto, cámara, luz o hueso…</option></select><button id="addAnimationTrack" title="Añadir pista al timeline">＋ Pista</button></div><div class="animation-track-list" id="animationTrackList"></div><div class="anim-subhead">HUESOS DEL RIG</div><div class="bone-list" id="boneList">Sin esqueleto seleccionado</div>
+            <div class="anim-head"><span>PISTAS DE ANIMACIÓN</span></div><div class="anim-track-picker"><select id="animationNodePicker" aria-label="Elegir objeto o nodo para animar"><option value="">Elegir objeto, cámara, luz o hueso…</option></select><button id="addAnimationTrack" title="Añadir pista al timeline">＋ Pista</button></div><div class="animation-track-list" id="animationTrackList"></div><div class="anim-subhead">HUESOS DEL RIG</div><div class="bone-list" id="boneList">Sin esqueleto seleccionado</div>
           </div>
           <div class="collection">▾ &nbsp;Scene Collection</div>
           <div id="objectList"></div>
